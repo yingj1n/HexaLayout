@@ -163,7 +163,7 @@ def bounding_box_to_matrix_image(one_target):
         label = one_target['category'][idx]
         min_y, min_x = np.floor((bb * 10 + 400).numpy().min(axis=1))
         max_y, max_x = np.ceil((bb * 10 + 400).numpy().max(axis=1))
-        print(min_x, max_x, min_y, max_y)
+        # print(min_x, max_x, min_y, max_y)
         for i in range(int(min_x), int(max_x)):
             for j in range(int(min_y), int(max_y)):
                 bounding_box_map[-i][j] = label
