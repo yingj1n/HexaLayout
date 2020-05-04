@@ -9,7 +9,7 @@ import utils
 from module_unet import UNet
 from module_resnet import ResNetEncoder
 
-
+NUM_OBJECTS = 10
 class SingleImageCNN(nn.Module):
     def __init__(self, blocks_sizes=[64, 128, 256], depths=[2, 2, 2]):
         super(SingleImageCNN, self).__init__()
@@ -290,13 +290,19 @@ class UNetRoadMapNetwork(nn.Module):
         #             in_features=bev_input_dim ** 2,
         #             out_features=1)
 
-        self.u_net = UNet(num_classes=1,
+        self.u_net_ld = UNet(num_classes=1,
+                          in_channels=single_blocks_sizes[-1],
+                          depth=unet_depth,
+                          start_filts=unet_start_filts, up_mode='transpose',
+                          merge_mode='concat')
+        
+        self.u_net_ob = UNet(num_classes=NUM_OBJECTS,
                           in_channels=single_blocks_sizes[-1],
                           depth=unet_depth,
                           start_filts=unet_start_filts, up_mode='transpose',
                           merge_mode='concat')
 
-    def forward(self, single_cam_input, verbose=False):
+    def forward(self, single_cam_input, lane = True, verbose=True):
         encoder_outputs = []
         for idx, cam_input in enumerate(single_cam_input):
             output = self.single_encoder(cam_input, verbose)
@@ -307,15 +313,18 @@ class UNetRoadMapNetwork(nn.Module):
         if verbose:
             print('concat_single', x.shape)
 
-        x = self.u_net(x, verbose)
+        if lane: 
+            x = self.u_net_ld(x, verbose)
+        else: # bbox
+            x = self.u_net_ob(x, verbose) 
 
         if verbose:
-            print('unet_output', x.shape)
+            print('unet_output', x.shape, 'lane? ', lane)
 
         x = F.interpolate(x, size=(800, 800), mode='bilinear', align_corners=False)
 
         if verbose:
-            print('interpolate', x.shape)
+            print('interpolate', x.shape, 'lane? ', lane)
 
         return x
 
@@ -408,7 +417,7 @@ class UNetRoadMapNetwork_extend2(nn.Module):
         #             in_features=bev_input_dim ** 2,
         #             out_features=1)
 
-        self.u_net = UNet(num_classes=1,
+        self.u_net = UNet(num_classes=NUM_OBJECTS,
                           in_channels=single_blocks_sizes[-1],
                           depth=unet_depth,
                           start_filts=unet_start_filts, up_mode='transpose',

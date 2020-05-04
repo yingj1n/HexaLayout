@@ -27,11 +27,13 @@ import utils
 import code.data_helper as data_helper
 from code.data_helper import UnlabeledDataset, LabeledDataset
 from code.helper import collate_fn, draw_box
+from code.helper import compute_iou, compute_ats_bounding_boxes
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--folder_dir', type=str, default='./')
 parser.add_argument('--verbose_dim', action='store_true')
 parser.add_argument('--train_batch_size', type=int, default=9)
+parser.add_argument('--train_object_detection', type=bool, default = True)
 opt = parser.parse_args()
 
 random.seed(888)
@@ -119,27 +121,56 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
 #     bev_input_dim=50
 # ).to(DEVICE)
 
-model = UNetRoadMapNetwork_extend2(
-         single_blocks_sizes=[16, 64],
-                 single_depths=[2, 2],
-                 unet_start_filts=64,
-                 unet_depth=5
+################################## SPECIFY YOUR MODEL HERE ##############################
+if not opt.train_object_detection: # original lane dection model 
+    model = UNetRoadMapNetwork_extend2(
+            single_blocks_sizes=[16, 64],
+                    single_depths=[2, 2],
+                    unet_start_filts=64,
+                    unet_depth=5
 
-).to(DEVICE)
+    ).to(DEVICE)
 
-# criterion = nn.CrossEntropyLoss()
-criterion = nn.BCEWithLogitsLoss()
-optimizer = torch.optim.Adam(model.parameters(),
-                             lr=learning_rate,
-                             weight_decay=1e-5)
+    # criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.Adam(model.parameters(),
+                                lr=learning_rate,
+                                weight_decay=1e-5)
+
+
+else: 
+    # model structure is basically same 
+    model = UNetRoadMapNetwork(
+            single_blocks_sizes=[16, 64],
+                    single_depths=[2, 2],
+                    unet_start_filts=64,
+                    unet_depth=5
+
+    ).to(DEVICE)
+
+    criterion_bbox = nn.CrossEntropyLoss()
+    criterion_lane = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.Adam(model.parameters(),
+                                lr=learning_rate,
+                                weight_decay=1e-5)
+
+
+#########################################################################################
+
+
 
 ## Training Loop
 learning_curve = []
 model.to(DEVICE)
 val_ts_list = []
 for epoch in range(num_epochs):
-    train_loss = 0
     train_ts_list = []
+    train_lane_loss = 0
+    #-----------------
+    # FOR object detection 
+    train_iou_list = []
+    train_loss_bbox = 0
+    #----------------
     sample_size = 0
     start_time = time.time()
     batch_end_time = start_time
@@ -155,47 +186,68 @@ for epoch in range(num_epochs):
             single_cam_input = Variable(single_cam_input).to(DEVICE)
             single_cam_inputs.append(single_cam_input)
 
+        ######## Change here so that model produces to output and back propagate to the same feature extractor #############
         # ===================forward=====================
-        bev_output = model(single_cam_inputs, opt.verbose_dim)
-        road_image_long = torch.stack(road_image).type(torch.FloatTensor).to(DEVICE)
-        # print(bev_output.shape, road_image_long.shape)
-        loss = criterion(bev_output.view(-1, 800, 800),
+        bev_lane_output = model(single_cam_inputs, True, opt.verbose_dim)
+        bev_bbox_output = model(single_cam_inputs, False, opt.verbose_dim)
+        #print('original bbox output shape',bev_bbox_output.shape) # torch.Size([9, 10, 800, 800])
+        _, bev_bbox_pred = torch.max(bev_bbox_output, dim = 1)
+        road_image_long = torch.stack(road_image).type(torch.FloatTensor).to(DEVICE) # torch.Size([9, 800, 800]) 
+
+        bbox_matrix_long = torch.tensor([utils.bounding_box_to_matrix_image(i) for i in target], dtype = torch.long) # torch.Size([9, 800, 800])
+        # print('bbox matrices ts size',  bbox_matrix_long.shape) # torch.Size([9, 800, 800])
+        
+        # print(bev_lane_output.shape, road_image_long.shape)
+        loss_lane = criterion_lane(bev_lane_output.view(-1, 800, 800),
                          road_image_long)
+        
+        loss_bbox = criterion_bbox(bev_bbox_output, bbox_matrix_long)
+        total_loss = loss_lane + loss_bbox
 
         # ===================backward====================
         optimizer.zero_grad()
-        loss.backward()
+        
+        #loss_lane.backward()
+        total_loss.backward()
         optimizer.step()
 
         # ===================log========================
-        train_loss += loss.item() * batch_size
+        train_lane_loss += loss_lane.item() * batch_size
         sample_size += batch_size
-#         predicted_road_map = np.argmax(bev_output.cpu().detach().numpy(), axis=1).astype(bool)
-        predicted_road_map = (bev_output > 0.5).view(-1, 800, 800)
+#         predicted_road_map = np.argmax(bev_lane_output.cpu().detach().numpy(), axis=1).astype(bool)
+        predicted_road_map = (bev_lane_output > 0.5).view(-1, 800, 800)
 #         print(predicted_road_map.shape, road_image[0].shape)
 #         print(road_image)
 
-        batch_ts, _ = utils.get_ts_for_batch_binary(bev_output, road_image)
+        # ----- bbox
+        train_loss_bbox += loss_bbox.item() * batch_size
+        train_iou = utils.compute_bbox_matrix_iou(labels = bbox_matrix_long, 
+                                                predictions = bev_bbox_pred)
+        train_iou_list.append(train_iou)
+        # -----
+        batch_ts, _ = utils.get_ts_for_batch_binary(bev_lane_output, road_image)
         train_ts_list.extend(batch_ts)
         avg_train_ts = sum(batch_ts) / len(batch_ts)
 
         batch_time = time.time() - batch_end_time
         batch_end_time = time.time()
         if batch % 10 == 0:
-            print('batch [{}], epoch [{}], loss: {:.4f}, time: {:.0f}s, ts: {:.4f}'
-                  .format(batch + 1, epoch + 1, train_loss / sample_size,
-                          batch_time, avg_train_ts))
+            print('batch [{}], epoch [{}], lane_loss: {:.4f}, bbox_loss: {:.4f},time: {:.0f}s, ts_lane: {:.4f}, mean_iou: {:.4f}'
+                  .format(batch + 1, epoch + 1, train_lane_loss / sample_size, train_loss_bbox / sample_size, 
+                          batch_time, avg_train_ts, np.average(train_iou_list)))
 
         # Empty Cache
         torch.cuda.empty_cache()
 
     # ===================log every epoch======================
-    train_ts = sum(train_ts_list) / len(train_ts_list)
-    val_ts, predicted_val_map = utils.evaluation(model, val_loader, DEVICE)
+    print(train_ts_list, len(train_ts_list))
+    train_ts = sum(train_ts_list) / len(train_ts_list) 
+    val_ts, predicted_val_map, val_iou_list = utils.evaluation(model, val_loader, DEVICE)
     time_this_epoch_min = (time.time() - start_time)/60
-    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: {:.4f}, val_ts: {:.4f}'
+    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: {:.4f}, val_ts: {:.4f}, train_iou: {:.4f}, val_iou: {:.4f}'
           .format(epoch + 1, num_epochs, train_loss / sample_size,
-                  time_this_epoch_min, time_this_epoch_min*(num_epochs-epoch-1), train_ts, val_ts))
+                  time_this_epoch_min, time_this_epoch_min*(num_epochs-epoch-1), train_ts, val_ts,
+                train_iou, np.average(val_iou)))
 
     learning_curve.append((train_ts, val_ts.tolist()))
     if epoch % 5 == 0 and epoch != 0:

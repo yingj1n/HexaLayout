@@ -47,7 +47,7 @@ class RandomBatchSampler(torch.utils.data.Sampler):
             return (len(self.sampler) + self.batch_size - 1) // self.batch_size
 
 
-def evaluation(model, data_loader, device):
+def evaluation(model, data_loader, device): ## changed to add bbox matrix prediction
     """
     Evaluate the model using thread score.
 
@@ -63,19 +63,24 @@ def evaluation(model, data_loader, device):
     model.to(device)
     ts_list = []
     predicted_maps = []
+    iou_list = []
     with torch.no_grad():
-        for sample, _, road_image, extra in tqdm(data_loader):
+        for sample, target, road_image, extra in tqdm(data_loader):
             single_cam_inputs = []
             for i in range(num_images):
                 single_cam_input = torch.stack([batch[i] for batch in sample])
                 single_cam_input = Variable(single_cam_input).to(device)
                 single_cam_inputs.append(single_cam_input)
-
-            bev_output = model(single_cam_inputs)
-            batch_ts, predicted_road_map = get_ts_for_batch_binary(bev_output, road_image)
+            bbox_matrix_long =  torch.tensor([bounding_box_to_matrix_image(i) for i in target])
+            bev_lane_output  = model(single_cam_inputs, lane = True) 
+            bev_bbox_output  = model(single_cam_inputs, lane = False)
+            batch_ts, predicted_road_map = get_ts_for_batch_binary(bev_lane_output, road_image)
+            _, bev_bbox_pred = torch.max(bev_bbox_output, dim = 1)
+            mean_iou         = compute_bbox_matrix_iou(labels= bbox_matrix_long, predictions = bev_bbox_pred)
             ts_list.extend(batch_ts)
             predicted_maps.append(predicted_road_map)
-    return np.nanmean(ts_list), predicted_maps
+            iou_list.append(mean_iou)
+    return np.nanmean(ts_list), predicted_maps, iou_list
 
 
 def get_ts_for_batch(model_output, road_image):
@@ -145,6 +150,66 @@ def combine_six_to_one(samples):
             [torch.cat(samples[:3], dim=-1),
              torch.cat([torch.flip(i, dims=(-2, -1)) for i in samples[3:]], dim=-1)
             ], dim=-2), k=3, dims=(-2, -1))
+
+
+def bounding_box_to_matrix_image(one_target):
+    """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
+    Args:
+        one_target: target[i] TODO
+    Returns: TODO
+    """
+    bounding_box_map = np.full((800, 800), 9) # make 9 the background  
+
+
+    for idx, bb in enumerate(one_target['bounding_box']):
+        label = one_target['category'][idx]
+        min_y, min_x = np.floor((bb * 10 + 400).numpy().min(axis=1))
+        max_y, max_x = np.ceil((bb * 10 + 400).numpy().max(axis=1))
+        # print(min_x, max_x, min_y, max_y)
+        for i in range(int(min_x), int(max_x)):
+            for j in range(int(min_y), int(max_y)):
+                bounding_box_map[-i][j] = label
+    return bounding_box_map
+
+def compute_bbox_matrix_iou(labels, predictions, n_classes = 10):
+    '''
+    given two matrices of true labels and predictions, return the mean iou over 10 classes
+    TODO: change this to avg mean threat scores (to get bbox from matrix)
+    '''
+    mean_iou = 0.0
+    seen_classes = 0
+
+    for c in range(n_classes):
+        labels_c = (labels != c)
+        pred_c = (predictions != c)
+
+        labels_c_sum = (labels_c).sum()
+        pred_c_sum = (pred_c).sum()
+
+        if (labels_c_sum > 0) or (pred_c_sum > 0):
+            seen_classes += 1
+
+            intersect = np.logical_and(labels_c, pred_c).sum()
+            union = labels_c_sum + pred_c_sum - intersect
+
+            mean_iou += intersect / union
+
+    mean_iou = mean_iou / seen_classes if seen_classes else 0
+    return mean_iou 
+    # iou_thresholds = [0.5, 0.6, 0.7, 0.8, 0.9]
+    # total_threat_score = 0
+    # total_weight = 0
+    # for threshold in iou_thresholds:
+    #     tp = (mean_iou > threshold).sum()
+    #     threat_score = tp * 1.0 / (num_boxes1 + num_boxes2 - tp)
+    #     total_threat_score += 1.0 / threshold * threat_score
+    #     total_weight += 1.0 / threshold
+
+    # average_threat_score = total_threat_score / total_weight
+    
+    # return average_threat_score
+
+
 
 
 # Some functions used to project 6 images and combine into one.
