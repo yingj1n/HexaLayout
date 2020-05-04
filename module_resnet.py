@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from functools import partial
 from collections import OrderedDict
 
+
 class Conv2dAuto(nn.Conv2d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

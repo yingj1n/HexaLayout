@@ -439,3 +439,48 @@ class UNetRoadMapNetwork_extend2(nn.Module):
             print('interpolate', x.shape)
 
         return x
+
+
+class RoadMapEncoder(nn.Module):
+    def __init__(self,
+                 single_blocks_sizes=[16, 32],
+                 single_depths=[2, 2]):
+        super(RoadMapEncoder, self).__init__()
+        #         self.bev_input_dim = bev_input_dim
+
+        # TODO: try different models for each camera angle
+        # single_encoders = {image_num: SingleImageCNN() for image_num in num_images}
+
+        self.single_encoder = SingleImageCNN(
+            blocks_sizes=single_blocks_sizes,
+            depths=single_depths)
+
+        #         self.single_encoder = {image_idx: SingleImageCNN(
+        #             blocks_sizes=single_blocks_sizes,
+        #             depths=single_depths) for image_idx in range(6)}
+
+        #         for i in range(len(self.single_encoder)):
+        #             self.add_module('single_encoder_{}'.format(i), self.single_encoder[i])
+        self.fusion = nn.Sequential(
+            nn.Conv2d(single_blocks_sizes[-1], single_blocks_sizes[-1], kernel_size=1),
+            nn.ReLU(True),
+        )
+
+
+    def forward(self, single_cam_input, verbose=False):
+        encoder_outputs = []
+        for idx, cam_input in enumerate(single_cam_input):
+            output = self.single_encoder(cam_input, verbose)
+            encoder_outputs.append(output)
+
+        x = utils.combine_six_to_one(encoder_outputs)
+
+        if verbose:
+            print('concat_single', x.shape)
+
+        x = self.fusion(x)
+        if verbose:
+            print('fusion_out', x.shape)
+
+        return x
+

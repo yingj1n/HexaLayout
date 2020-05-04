@@ -79,6 +79,54 @@ def evaluation(model, data_loader, device):
     return np.nanmean(ts_list), predicted_maps
 
 
+def to_train(models, DEVICE):
+    for key in models.keys():
+        models[key].to(DEVICE)
+        models[key].train()
+    return models
+
+
+def to_eval(models, DEVICE):
+    for key in models.keys():
+        models[key].to(DEVICE)
+        models[key].eval()
+    return models
+
+def evaluation_layout(models, data_loader, device):
+    """
+    Evaluate the model using thread score.
+
+    Args:
+        model: A trained pytorch model.
+        data_loader: The dataloader for a labeled dataset.
+
+    Returns:
+        Average threat score for the entire data set.
+        Predicted classification results.
+    """
+    models = to_eval(models, device)
+    ts_list = []
+    predicted_maps = []
+    with torch.no_grad():
+        for sample, target, road_image, extra in tqdm(data_loader):
+            # target_bb_map = torch.stack([bounding_box_to_matrix_image(i) for i in target]).to(device)
+            single_cam_inputs = []
+            for i in range(num_images):
+                single_cam_input = torch.stack([batch[i] for batch in sample])
+                single_cam_input = Variable(single_cam_input).to(device)
+                single_cam_inputs.append(single_cam_input)
+
+            encoded_features = models['encoder'](single_cam_inputs)
+            outputs = {}
+            outputs["dynamic"] = models["dynamic_decoder"](encoded_features)
+            outputs["static"] = models["static_decoder"](encoded_features)
+
+            batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs["static"], road_image)
+            ts_list.extend(batch_ts)
+            predicted_maps.append(predicted_road_map)
+    return np.nanmean(ts_list), predicted_maps
+
+
 def get_ts_for_batch(model_output, road_image):
     """Get average threat score for a mini-batch.
 
@@ -166,7 +214,7 @@ def bounding_box_to_matrix_image(one_target):
         # print(min_x, max_x, min_y, max_y)
         for i in range(int(min_x), int(max_x)):
             for j in range(int(min_y), int(max_y)):
-                bounding_box_map[-i][j] = label
+                bounding_box_map[-i][j] = label + 1
     return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
 
 # Some functions used to project 6 images and combine into one.
