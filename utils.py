@@ -196,7 +196,7 @@ def combine_six_to_one(samples):
              ], dim=-2), k=3, dims=(-2, -1))
 
 
-def bounding_box_to_matrix_image(one_target):
+def bounding_box_to_matrix_image(one_target, labels=True):
     """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
 
     Args:
@@ -214,7 +214,10 @@ def bounding_box_to_matrix_image(one_target):
         # print(min_x, max_x, min_y, max_y)
         for i in range(int(min_x), int(max_x)):
             for j in range(int(min_y), int(max_y)):
-                bounding_box_map[-i][j] = label + 1
+                if labels:
+                    bounding_box_map[-i][j] = label + 1
+                else:
+                    bounding_box_map[-i][j] = 1
     return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
 
 # Some functions used to project 6 images and combine into one.

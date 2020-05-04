@@ -33,6 +33,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--folder_dir', type=str, default='./')
 parser.add_argument('--verbose_dim', action='store_true')
 parser.add_argument('--train_batch_size', type=int, default=9)
+parser.add_argument('--bbox_label', action='store_true')
 opt = parser.parse_args()
 
 random.seed(888)
@@ -107,7 +108,7 @@ labeled_valset = LabeledDataset(image_folder=image_folder,
                                 )
 val_loader = torch.utils.data.DataLoader(labeled_valset,
                                          batch_size=val_batch_size,
-                                         shuffle=False, num_workers=0,
+                                         shuffle=True, num_workers=0,
                                          collate_fn=collate_fn)
 
 # model = LWRoadMapNetwork(
@@ -120,15 +121,22 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
 #     bev_input_dim=50
 # ).to(DEVICE)
 
+if opt.bbox_label:
+    bbox_out_features = 10
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
+else:
+    bbox_out_features = 1
+    criterion_dynamic = nn.BCEWithLogitsLoss()
+
 models = {'encoder': RoadMapEncoder(
     single_blocks_sizes=[16, 128, 256],
     single_depths=[2, 2, 2]),
     'static_decoder': module_monolayout.Decoder(1),
     'static_discr': module_monolayout.Discriminator(),
     'dynamic_discr': module_monolayout.Discriminator(),
-    'dynamic_decoder': module_monolayout.Decoder(10)}
+    'dynamic_decoder': module_monolayout.Decoder(bbox_out_features)}
 
-criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
+# criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
 criterion_static = nn.BCEWithLogitsLoss()
 
 parameters_discr = []
@@ -170,7 +178,7 @@ for epoch in range(num_epochs):
     models = utils.to_train(models, DEVICE)
     for batch, (sample, target, road_image, extra) in enumerate(train_loader):
         batch_size = len(sample)
-        target_bb_map = torch.stack([utils.bounding_box_to_matrix_image(i) for i in target]).to(DEVICE)
+        target_bb_map = torch.stack([utils.bounding_box_to_matrix_image(i, opt.bbox_label) for i in target]).to(DEVICE)
         road_image_long = torch.stack(road_image).type(torch.FloatTensor).to(DEVICE)
 
         single_cam_inputs = []
@@ -188,8 +196,11 @@ for epoch in range(num_epochs):
 
         if opt.verbose_dim:
             print(outputs["dynamic"].shape, outputs["static"].shape)
-
-        loss_dynamic = criterion_dynamic(outputs["dynamic"], target_bb_map)
+        
+        if opt.bbox_label:
+            loss_dynamic = criterion_dynamic(outputs["dynamic"], target_bb_map)
+        else:
+            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800), target_bb_map.type(torch.FloatTensor).to(DEVICE))
         loss_static = criterion_static(outputs["static"].view(-1, 800, 800), road_image_long)
         loss = loss_static + loss_dynamic
 
