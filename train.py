@@ -194,7 +194,7 @@ for epoch in range(num_epochs):
         _, bev_bbox_pred = torch.max(bev_bbox_output, dim = 1)
         road_image_long = torch.stack(road_image).type(torch.FloatTensor).to(DEVICE) # torch.Size([9, 800, 800]) 
 
-        bbox_matrix_long = torch.tensor([utils.bounding_box_to_matrix_image(i) for i in target], dtype = torch.long) # torch.Size([9, 800, 800])
+        bbox_matrix_long = torch.tensor([utils.bounding_box_to_matrix_image(i) for i in target], dtype = torch.long).to(DEVICE) # torch.Size([9, 800, 800])
         # print('bbox matrices ts size',  bbox_matrix_long.shape) # torch.Size([9, 800, 800])
         
         # print(bev_lane_output.shape, road_image_long.shape)
