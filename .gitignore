@@ -1,0 +1,9 @@
+data/
+__pycache__/
+.idea
+.ipynb_checkpoints
+monolayout/
+*.ipynb
+*.pth
+model_v1.py
+train_old.py
