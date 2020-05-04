@@ -167,7 +167,7 @@ def bounding_box_to_matrix_image(one_target):
         for i in range(int(min_x), int(max_x)):
             for j in range(int(min_y), int(max_y)):
                 bounding_box_map[-i][j] = label
-    return bounding_box_map
+    return torch.from_numpy(bounding_box_map).type(torch.IntTensor)
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.
