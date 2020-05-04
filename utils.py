@@ -17,6 +17,7 @@ class RandomBatchSampler(torch.utils.data.Sampler):
     When getting inputs of [0, 1, 2, 3, 4, 5, 6, 7, 8] with batch_size=2,
     returns [4, 5], [0, 1], [8], [2, 3], [6, 7] in a random sequence.
     """
+
     def __init__(self,
                  sampler,
                  batch_size,
@@ -114,8 +115,8 @@ def get_ts_for_batch_binary(model_output, road_image):
     Returns:
         Average threat score.
     """
-#     _, predicted_road_map = model_output.max(1)
-#     predicted_road_map = predicted_road_map.type(torch.BoolTensor)
+    #     _, predicted_road_map = model_output.max(1)
+    #     predicted_road_map = predicted_road_map.type(torch.BoolTensor)
     predicted_road_map = (model_output > 0.5).view(-1, 800, 800)
     # predicted_road_map = np.argmax(bev_output.cpu().detach().numpy(), axis=1).astype(bool)
 
@@ -144,8 +145,29 @@ def combine_six_to_one(samples):
         torch.cat(
             [torch.cat(samples[:3], dim=-1),
              torch.cat([torch.flip(i, dims=(-2, -1)) for i in samples[3:]], dim=-1)
-            ], dim=-2), k=3, dims=(-2, -1))
+             ], dim=-2), k=3, dims=(-2, -1))
 
+
+def bounding_box_to_matrix_image(one_target):
+    """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
+
+    Args:
+        one_target: target[i] TODO
+
+    Returns: TODO
+
+    """
+    bounding_box_map = np.zeros((800, 800))
+
+    for idx, bb in enumerate(one_target['bounding_box']):
+        label = one_target['category'][idx]
+        min_y, min_x = np.floor((bb * 10 + 400).numpy().min(axis=1))
+        max_y, max_x = np.ceil((bb * 10 + 400).numpy().max(axis=1))
+        print(min_x, max_x, min_y, max_y)
+        for i in range(int(min_x), int(max_x)):
+            for j in range(int(min_y), int(max_y)):
+                bounding_box_map[-i][j] = label
+    return bounding_box_map
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.
