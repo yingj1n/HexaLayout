@@ -123,8 +123,8 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False):
             outputs["dynamic"] = models["dynamic_decoder"](encoded_features, is_training=False)
             outputs["static"] = models["static_decoder"](encoded_features, is_training=False)
 
-            roadmap_batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs["static"], road_image)
-            bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target, bbox_labels)
+            roadmap_batch_ts, predicted_road_map = get_rm_ts_for_batch(outputs["static"], road_image)
+            bb_batch_ts, predicted_bb_map = get_bb_ts_for_batch(outputs["dynamic"], target)
 #             print(roadmap_batch_ts, bb_batch_ts)
             rm_ts_list.extend(roadmap_batch_ts)
             bb_ts_list.extend(bb_batch_ts)
@@ -132,12 +132,9 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False):
     return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), predicted_maps
 
 
-def get_ts_for_bb(model_output, target, bbox_labels):
-    if bbox_labels:
-        _, predicted_bb_map = model_output.max(1)
-        predicted_bb_map = predicted_bb_map.type(torch.BoolTensor)
-    else:
-        predicted_bb_map = (model_output > 0.5).view(-1, 800, 800)
+def get_bb_ts_for_batch(model_output, target):
+    _, predicted_bb_map = model_output.max(1)
+    predicted_bb_map = predicted_bb_map.type(torch.BoolTensor)
 
     batch_ts = []
     for batch_index in range(len(target)):
@@ -148,8 +145,8 @@ def get_ts_for_bb(model_output, target, bbox_labels):
     return batch_ts, predicted_bb_map
 
 
-def get_ts_for_batch(model_output, road_image):
-    """Get average threat score for a mini-batch.
+def get_rm_ts_for_batch(model_output, road_image):
+    """Get average roadmap threat score for a mini-batch.
 
     Args:
         model_output: A matrix as the output from the classification model with a shape of
@@ -172,7 +169,7 @@ def get_ts_for_batch(model_output, road_image):
     return batch_ts, predicted_road_map
 
 
-def get_ts_for_batch_binary(model_output, road_image):
+def get_rm_ts_for_batch_binary(model_output, road_image):
     """Get average threat score for a mini-batch.
 
     Args:

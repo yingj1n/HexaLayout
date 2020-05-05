@@ -138,7 +138,7 @@ if opt.bbox_label:
     criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
 else:
     bbox_out_features = 2
-    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([0.9, 0.1]).to(DEVICE))
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 15]).to(DEVICE))
     
 criterion_static = nn.CrossEntropyLoss()
 
@@ -149,7 +149,7 @@ if opt.temporal:
         single_blocks_sizes=[64, 128, 256],
         single_depths=[2, 2, 2],
         fusion_block_sizes=[256, 512, 1024],
-        fusion_depths=[2, 2, 1],
+        fusion_depths=[1, 1, 1],
         fusion_out_feature=1024,
         temporal_hidden=1024,
         output_size=1024,
@@ -233,8 +233,8 @@ for epoch in range(num_epochs):
         # ===================forward=====================
         encoded_features = models['encoder'](single_cam_inputs, opt.verbose_dim)
         outputs = {}
-        outputs["dynamic"] = models["dynamic_decoder"](encoded_features)
-        outputs["static"] = models["static_decoder"](encoded_features)
+        outputs["dynamic"] = models["dynamic_decoder"](encoded_features, verbose=opt.verbose_dim)
+        outputs["static"] = models["static_decoder"](encoded_features, verbose=opt.verbose_dim)
 
         if opt.verbose_dim:
             print(outputs["dynamic"].shape, outputs["static"].shape)
@@ -256,13 +256,12 @@ for epoch in range(num_epochs):
         # ===================log========================
         train_loss += loss.item() * batch_size
         sample_size += batch_size
-        predicted_road_map = (outputs["static"] > 0.5).view(-1, 800, 800)
 
-        batch_rm_ts, _ = utils.get_ts_for_batch_binary(outputs["static"], road_image)
+        batch_rm_ts, _ = utils.get_rm_ts_for_batch(outputs["static"], road_image)
         train_rm_ts_list.extend(batch_rm_ts)
         avg_train_rm_ts = sum(batch_rm_ts) / len(batch_rm_ts)
         
-        batch_bb_ts, _ = utils.get_ts_for_bb(outputs["dynamic"], target, opt.bbox_label)
+        batch_bb_ts, _ = utils.get_bb_ts_for_batch(outputs["dynamic"], target)
         train_bb_ts_list.extend(batch_bb_ts)
         avg_train_bb_ts = sum(batch_bb_ts) / len(batch_bb_ts)
 

@@ -86,7 +86,7 @@ class Decoder(nn.Module):
 
 
 
-    def forward(self, x, is_training=True):
+    def forward(self, x, is_training=True, verbose=False):
         for i in range(4, -1, -1):
             x = self.convs[("upconv", i, 0)](x)
             x = self.convs[("norm", i, 0)](x)
@@ -101,6 +101,8 @@ class Decoder(nn.Module):
         else:
                 softmax = nn.Softmax2d()
                 x = softmax(self.convs["topview"](x))
+        if verbose:
+            print('decode_output', x.shape)
 
         x = F.interpolate(x, size=(800, 800), mode='bilinear', align_corners=False)
         #outputs["car"] = x
