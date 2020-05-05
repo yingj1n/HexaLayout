@@ -8,6 +8,7 @@ import utils
 
 from module_unet import UNet
 from module_resnet import ResNetEncoder
+from collections import OrderedDict
 
 NUM_OBJECTS = 10
 class SingleImageCNN(nn.Module):
@@ -259,6 +260,181 @@ class RoadMapNetwork(nn.Module):
             print('bev_output', x.shape)
         return x
 
+##############################################################################
+####################### MONO LAYOUT MODELS ###################################
+##############################################################################
+
+# encoder: the same 
+class MonoEncoder(nn.Module):
+    def __init__(self, 
+                single_blocks_sizes = [16, 32, 64],
+                single_depths = [2, 2, 2]):
+
+        super(MonoEncoder, self).__init__()
+
+        self.single_encoder = SingleImageCNN(
+            blocks_sizes = single_blocks_sizes,
+            depths = single_depths,
+        )
+
+    def forward(self, single_cam_input,  verbose=False):
+        encoder_outputs = []
+        for idx, cam_input in enumerate(single_cam_input):
+            output = self.single_encoder(cam_input, verbose)
+            encoder_outputs.append(output)
+
+        x = utils.combine_six_to_one(encoder_outputs) ### try with other combining methods 
+
+        if verbose:
+            print('encoder output', x.shape)
+
+        return x
+
+# decoder: from mono layout
+
+class Conv3x3(nn.Module):
+    """Layer to pad and convolve input
+    """
+    def __init__(self, in_channels, out_channels, use_refl=True):
+        super(Conv3x3, self).__init__()
+
+        if use_refl:
+            self.pad = nn.ReflectionPad2d(1)
+        else:
+            self.pad = nn.ZeroPad2d(1)
+        self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3)
+
+    def forward(self, x):
+        out = self.pad(x)
+        out = self.conv(out)
+        return out
+
+
+def upsample(x):
+    """Upsample input tensor by a factor of 2
+    """
+    return F.interpolate(x, scale_factor=2, mode="nearest")
+
+
+class MonoDecoder(nn.Module):
+    def __init__(self, 
+                single_block_size_output = 64,
+                features = 1):
+        super(MonoDecoder, self).__init__()
+    
+        self.num_output_channels = features # static 
+        self.num_ch_enc = single_block_size_output
+        self.num_ch_dec = np.array([16, 32, 64, 128, 256])
+        # self.num_ch_concat = np.array([64, 128, 256, 512, 128])
+        # self.conv_mu = nn.Conv2d(128, 128, 3, 1, 1)
+        # self.conv_log_sigma = nn.Conv2d(128, 128, 3, 1, 1)
+        outputs = {}
+        # decoder
+        self.convs = OrderedDict()
+        for i in range(4, -1, -1):
+            # upconv_0
+            num_ch_in = self.num_ch_enc if i == 4 else self.num_ch_dec[i + 1]
+            num_ch_out = self.num_ch_dec[i]
+            # num_ch_concat = self.num_ch_concat[i]
+            self.convs[("upconv", i, 0)] = nn.Conv2d(num_ch_in, num_ch_out, 3, 1, 1) #Conv3x3(num_ch_in, num_ch_out)
+            self.convs[("norm", i, 0)] = nn.BatchNorm2d(num_ch_out)
+            self.convs[("relu", i, 0)] =  nn.ReLU(True)
+
+            # upconv_1
+            self.convs[("upconv", i, 1)] = nn.Conv2d(num_ch_out, num_ch_out, 3, 1, 1) #ConvBlock(num_ch_out, num_ch_out)
+            self.convs[("norm", i, 1)] = nn.BatchNorm2d(num_ch_out)
+
+        self.convs["topview"] = Conv3x3(self.num_ch_dec[0], self.num_output_channels)
+        self.dropout = nn.Dropout3d(0.2)
+        self.decoder = nn.ModuleList(list(self.convs.values()))
+
+    def forward(self, x, verbose = False):
+        for i in range(4, -1, -1):
+            x = self.convs[("upconv", i, 0)](x)
+            x = self.convs[("norm", i, 0)](x)
+            x = self.convs[("relu", i, 0)](x)
+            x = upsample(x)
+            #x = torch.cat((x, features[i-6]), 1)
+            x = self.convs[("upconv", i, 1)](x)
+            x = self.convs[("norm", i, 1)](x)
+       
+        x = self.convs["topview"](x) 
+
+        if verbose:
+            print('decoder output', x.shape) # torch.Size([9, 2, 3072, 2048])
+            
+        x = F.interpolate(x, size=(800, 800), mode='bilinear', align_corners=False)
+
+        if verbose:
+            print('interpolate', x.shape) # torch.Size([9, 2, 800, 800])
+        return x
+
+# decoder: from Unet
+
+class UnetDecoder(nn.Module):
+    def __init__(self, 
+                single_block_size_output = 64,
+                unet_start_filts=64,
+                unet_depth=5,
+                num_objects=1, 
+                ):
+        super(UnetDecoder, self).__init__()
+
+        self.u_net = UNet(num_classes=num_objects,
+                            in_channels=single_block_size_output,
+                            depth=unet_depth,
+                            start_filts=unet_start_filts, up_mode='transpose',
+                            merge_mode='concat')
+        
+
+    def forward(self, encoder_output, verbose = False):
+        
+        x = self.u_net(encoder_output, verbose)
+
+        if verbose:
+            print('decoder output', x.shape)
+
+        x = F.interpolate(x, size=(800, 800), mode='bilinear', align_corners=False)
+
+        if verbose:
+            print('interpolate', x.shape)
+
+        return x
+
+# class UnetDecoder_static(nn.Module):
+#     def __init__(self, 
+#                 single_block_size_output = 64,
+#                 unet_start_filts=64,
+#                 unet_depth=5
+#                 ):
+#         super(UnetDecoder_static, self).__init__()
+
+#         self.u_net_static = UNet(num_classes=1,
+#                             in_channels=single_block_size_output,
+#                             depth=unet_depth,
+#                             start_filts=unet_start_filts, up_mode='transpose',
+#                             merge_mode='concat')
+
+#     def forward(self, encoder_output, verbose = False):
+        
+#         x = self.u_net_static(encoder_output, verbose)
+#         if verbose:
+#             print('decoder output', x.shape)
+
+#         x = F.interpolate(x, size=(800, 800), mode='bilinear', align_corners=False)
+
+#         if verbose:
+#             print('interpolate', x.shape)
+
+#         return x
+
+
+#####################################################################################
+#####################################################################################
+#####################################################################################
+
+
+
 
 class UNetRoadMapNetwork(nn.Module):
     def __init__(self,
@@ -302,7 +478,7 @@ class UNetRoadMapNetwork(nn.Module):
                           start_filts=unet_start_filts, up_mode='transpose',
                           merge_mode='concat')
 
-    def forward(self, single_cam_input, lane = True, verbose=True):
+    def forward(self, single_cam_input, lane = True, verbose=False):
         encoder_outputs = []
         for idx, cam_input in enumerate(single_cam_input):
             output = self.single_encoder(cam_input, verbose)

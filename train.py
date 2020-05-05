@@ -110,8 +110,14 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
                                          batch_size=val_batch_size,
                                          shuffle=False, num_workers=0,
                                          collate_fn=collate_fn)
-
-# model = LWRoadMapNetwork(
+from tqdm import tqdm
+for sample, target, road_image, extra in tqdm(val_loader):
+    print(len(target))
+    torch.tensor(utils.bounding_box_to_matrix_image(target[0])).to('cpu')
+    print('done')
+    break 
+print('done2')
+# model = LWRoadMapNetwork( 
 #     single_blocks_sizes=[64, 128, 256],
 #     single_depths=[1, 1, 1],
 #     fusion_block_sizes=[256, 512, 1024],
@@ -240,14 +246,15 @@ for epoch in range(num_epochs):
         torch.cuda.empty_cache()
 
     # ===================log every epoch======================
-    print(train_ts_list, len(train_ts_list))
+   #print(train_ts_list, len(train_ts_list))
     train_ts = sum(train_ts_list) / len(train_ts_list) 
     val_ts, predicted_val_map, val_iou_list = utils.evaluation(model, val_loader, DEVICE)
     time_this_epoch_min = (time.time() - start_time)/60
-    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: {:.4f}, val_ts: {:.4f}, train_iou: {:.4f}, val_iou: {:.4f}'
-          .format(epoch + 1, num_epochs, train_loss / sample_size,
+    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min,\
+     train_ts: {:.4f}, val_ts: {:.4f}, train_iou: {:.4f}, val_iou: {:.4f}'
+          .format(epoch + 1, num_epochs, train_lane_loss / sample_size,
                   time_this_epoch_min, time_this_epoch_min*(num_epochs-epoch-1), train_ts, val_ts,
-                train_iou, np.average(val_iou)))
+                np.average(train_iou_list), np.average(val_iou)))
 
     learning_curve.append((train_ts, val_ts.tolist()))
     if epoch % 5 == 0 and epoch != 0:

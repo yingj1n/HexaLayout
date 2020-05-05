@@ -121,7 +121,7 @@ class ResNetEncoder(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         )
 
-        self.in_out_block_sizes = list(zip(blocks_sizes, blocks_sizes[1:]))
+        self.in_out_block_sizes = list(zip(blocks_sizes, blocks_sizes[1:])) # [(64, 128), (128, 256), (256, 512)]
         self.blocks = nn.ModuleList([
             ResNetLayer(blocks_sizes[0], blocks_sizes[0], n=depths[0], activation=activation,
                         block=block, *args, **kwargs),

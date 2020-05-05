@@ -7,6 +7,9 @@ from torch.autograd import Variable
 
 import code.helper as helper
 import code.data_helper as data_helper
+import skimage.measure
+
+from shapely.geometry import Polygon
 
 num_images = data_helper.NUM_IMAGE_PER_SAMPLE
 
@@ -47,7 +50,7 @@ class RandomBatchSampler(torch.utils.data.Sampler):
             return (len(self.sampler) + self.batch_size - 1) // self.batch_size
 
 
-def evaluation(model, data_loader, device): ## changed to add bbox matrix prediction
+def evaluation(models, data_loader, device, dynamic_label): ## changed to add bbox matrix prediction
     """
     Evaluate the model using thread score.
 
@@ -59,11 +62,13 @@ def evaluation(model, data_loader, device): ## changed to add bbox matrix predic
         Average threat score for the entire data set.
         Predicted classification results.
     """
-    model.eval()
-    model.to(device)
+    for key in models.keys():
+        models[key].to(device)
     ts_list = []
-    predicted_maps = []
+    predicted_static_maps = []
+    predicted_dynamic_maps = []
     iou_list = []
+    dynamic_ts_list = []
     with torch.no_grad():
         for sample, target, road_image, extra in tqdm(data_loader):
             single_cam_inputs = []
@@ -71,16 +76,45 @@ def evaluation(model, data_loader, device): ## changed to add bbox matrix predic
                 single_cam_input = torch.stack([batch[i] for batch in sample])
                 single_cam_input = Variable(single_cam_input).to(device)
                 single_cam_inputs.append(single_cam_input)
-            bbox_matrix =  torch.tensor(bounding_box_to_matrix_image(target)).to(device)
-            bev_lane_output  = model(single_cam_inputs, lane = True) 
-            bev_bbox_output  = model(single_cam_inputs, lane = False)
-            batch_ts, predicted_road_map = get_ts_for_batch_binary(bev_lane_output, road_image)
-            _, bev_bbox_pred = torch.max(bev_bbox_output, dim = 1)
-            mean_iou         = compute_bbox_matrix_iou(labels= bbox_matrix, predictions = bev_bbox_pred)
+            
+            encoded_features = models['encode'](single_cam_inputs)
+            outputs= {}
+            outputs['static'] = models['static'](encoded_features)
+            outputs['dynamic'] = models['dynamic'](encoded_features)
+
+            # dynamic
+            bbox_matrix= torch.tensor(bounding_box_to_matrix_image(target[0], dynamic_label)).to(device) 
+            _, output_dynamic_pred = torch.max(outputs['dynamic'], dim = 1)
+            mean_iou = compute_bbox_matrix_iou(output_dynamic_pred, bbox_matrix)
+
+            bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target, dynamic_label)
+            # static
+            batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs['static'], road_image)
+           
+            # log 
             ts_list.extend(batch_ts)
-            predicted_maps.append(predicted_road_map)
+            predicted_static_maps.append(predicted_road_map)
+            predicted_dynamic_maps.append(predicted_bb_map)
             iou_list.append(mean_iou)
-    return np.nanmean(ts_list), predicted_maps, iou_list
+            dynamic_ts_list.extend(bb_batch_ts)
+        
+    return np.nanmean(ts_list), predicted_static_maps, np.average(iou_list), np.nanmean(dynamic_ts_list), predicted_dynamic_maps
+
+
+def get_ts_for_bb(model_output, target, bbox_labels):
+    if bbox_labels == 10:
+        _, predicted_bb_map = model_output.max(1)
+        predicted_bb_map = predicted_bb_map.type(torch.BoolTensor)
+    else:
+        predicted_bb_map = (model_output > 0.5).view(-1, 800, 800)
+
+    batch_ts = []
+    for batch_index in range(len(target)):
+        predicted_boxes = matrix_to_bbox(predicted_bb_map[batch_index].cpu())
+        sample_ts = compute_ats_bounding_boxes(predicted_boxes,
+                                               target[batch_index]['bounding_box'])
+        batch_ts.append(sample_ts)
+    return batch_ts, predicted_bb_map
 
 
 def get_ts_for_batch(model_output, road_image):
@@ -119,11 +153,9 @@ def get_ts_for_batch_binary(model_output, road_image):
     Returns:
         Average threat score.
     """
-#     _, predicted_road_map = model_output.max(1)
-#     predicted_road_map = predicted_road_map.type(torch.BoolTensor)
-    predicted_road_map = (model_output > 0.5).view(-1, 800, 800)
-    # predicted_road_map = np.argmax(bev_output.cpu().detach().numpy(), axis=1).astype(bool)
 
+    predicted_road_map = (model_output > 0.5).view(-1, 800, 800)
+ 
     batch_ts = []
     for batch_index in range(len(road_image)):
         sample_ts = helper.compute_ts_road_map(predicted_road_map[batch_index].cpu(),
@@ -152,14 +184,13 @@ def combine_six_to_one(samples):
             ], dim=-2), k=3, dims=(-2, -1))
 
 
-def bounding_box_to_matrix_image(one_target):
+def bounding_box_to_matrix_image(one_target, labels=True):
     """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
     Args:
         one_target: target[i] TODO
     Returns: TODO
     """
-    bounding_box_map = np.full((800, 800), 9) # make 9 the background  
-
+    bounding_box_map = np.zeros((800, 800))
 
     for idx, bb in enumerate(one_target['bounding_box']):
         label = one_target['category'][idx]
@@ -168,47 +199,116 @@ def bounding_box_to_matrix_image(one_target):
         # print(min_x, max_x, min_y, max_y)
         for i in range(int(min_x), int(max_x)):
             for j in range(int(min_y), int(max_y)):
-                bounding_box_map[-i][j] = label
-    return bounding_box_map
+                if labels:
+                    bounding_box_map[-i][j] = label + 1
+                else:
+                    bounding_box_map[-i][j] = 1
+    return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
 
-def compute_bbox_matrix_iou(labels, predictions, n_classes = 10):
+
+def matrix_to_bbox(image, verbose = False):
+    image = image.cpu()
+    label = skimage.measure.label(image)
+    region_proposals = skimage.measure.regionprops(label)
+    num_bbox = len(region_proposals)
+    if verbose:
+        print('input image shape', image.shape)
+        print('partial input image', image[:3,:3])
+    print('number of bbox to return: ', num_bbox)
+    bboxes = np.zeros([num_bbox, 2, 4])
+    
+    for i, rp in enumerate(region_proposals):
+        raw_bb = np.array(rp.bbox)
+        raw_bb[-2:] = raw_bb[-2:] - 1 # Since bbox in rp is upperbound exclusive
+        y_min, x_min, y_max, x_max = (raw_bb - 400) / 10
+        bbox = np.array([x_min, x_min, x_max, x_max, -y_min, -y_max, -y_min, -y_max]).reshape(2,4)
+        bboxes[i] = bbox
+    
+    if num_bbox:
+        return torch.from_numpy(bboxes)
+    else: # Return the entire canvas when no bbox is being identified.
+        bboxes = np.zeros([1, 2, 4])
+        bboxes[0] = np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2,4)
+        return torch.from_numpy(bboxes)
+
+def compute_bbox_matrix_iou(batch_predictions, batch_labels, n_classes = 10):
     '''
     given two matrices of true labels and predictions, return the mean iou over 10 classes
     TODO: change this to avg mean threat scores (to get bbox from matrix)
     '''
-    mean_iou = 0.0
-    seen_classes = 0
+    num_batches = batch_predictions.shape[0]
+    mean_iou_list = []
+    for i in range(num_batches):
+        labels, predictions = batch_labels[i], batch_predictions[i]
 
-    for c in range(n_classes):
-        labels_c = (labels != c)
-        pred_c = (predictions != c)
+        mean_iou = 0.0
+        seen_classes = 0
+        for c in range(n_classes):
+            labels_c = (labels != c)
+            pred_c = (predictions != c)
 
-        labels_c_sum = (labels_c).sum()
-        pred_c_sum = (pred_c).sum()
+            labels_c_sum = (labels_c).sum()
+            pred_c_sum = (pred_c).sum()
 
-        if (labels_c_sum > 0) or (pred_c_sum > 0):
-            seen_classes += 1
+            if (labels_c_sum > 0) or (pred_c_sum > 0):
+                seen_classes += 1
 
-            intersect = np.logical_and(labels_c, pred_c).sum()
-            union = labels_c_sum + pred_c_sum - intersect
+                intersect = np.logical_and(labels_c.cpu(), pred_c.cpu()).sum()
+                union = labels_c_sum + pred_c_sum - intersect
 
-            mean_iou += intersect / union
+                mean_iou += intersect / union
+        mean_iou = mean_iou / seen_classes if seen_classes else 0
+        mean_iou_list.append(mean_iou)
 
-    mean_iou = mean_iou / seen_classes if seen_classes else 0
-    return mean_iou 
-    # iou_thresholds = [0.5, 0.6, 0.7, 0.8, 0.9]
-    # total_threat_score = 0
-    # total_weight = 0
-    # for threshold in iou_thresholds:
-    #     tp = (mean_iou > threshold).sum()
-    #     threat_score = tp * 1.0 / (num_boxes1 + num_boxes2 - tp)
-    #     total_threat_score += 1.0 / threshold * threat_score
-    #     total_weight += 1.0 / threshold
+    return np.nanmean(mean_iou_list)
 
-    # average_threat_score = total_threat_score / total_weight
+
+def compute_ats_bounding_boxes(boxes1, boxes2):
+    num_boxes1 = boxes1.size(0)
+    num_boxes2 = boxes2.size(0)
+
+    boxes1_max_x = boxes1[:, 0].max(dim=1)[0]
+    boxes1_min_x = boxes1[:, 0].min(dim=1)[0]
+    boxes1_max_y = boxes1[:, 1].max(dim=1)[0]
+    boxes1_min_y = boxes1[:, 1].min(dim=1)[0]
+
+    boxes2_max_x = boxes2[:, 0].max(dim=1)[0]
+    boxes2_min_x = boxes2[:, 0].min(dim=1)[0]
+    boxes2_max_y = boxes2[:, 1].max(dim=1)[0]
+    boxes2_min_y = boxes2[:, 1].min(dim=1)[0]
+
+    condition1_matrix = (boxes1_max_x.unsqueeze(1) > boxes2_min_x.unsqueeze(0))
+    condition2_matrix = (boxes1_min_x.unsqueeze(1) < boxes2_max_x.unsqueeze(0))
+    condition3_matrix = (boxes1_max_y.unsqueeze(1) > boxes2_min_y.unsqueeze(0))
+    condition4_matrix = (boxes1_min_y.unsqueeze(1) < boxes2_max_y.unsqueeze(0))
+    condition_matrix = condition1_matrix * condition2_matrix * condition3_matrix * condition4_matrix
+
+    iou_matrix = torch.zeros(num_boxes1, num_boxes2)
+    for i in range(num_boxes1):
+        for j in range(num_boxes2):
+            if condition_matrix[i][j]:
+                iou_matrix[i][j] = compute_iou(boxes1[i], boxes2[j])
+
+    iou_max = iou_matrix.max(dim=0)[0]
+
+    iou_thresholds = [0.5, 0.6, 0.7, 0.8, 0.9]
+    total_threat_score = 0
+    total_weight = 0
+    for threshold in iou_thresholds:
+        tp = (iou_max > threshold).sum()
+        threat_score = tp * 1.0 / (num_boxes1 + num_boxes2 - tp)
+        total_threat_score += 1.0 / threshold * threat_score
+        total_weight += 1.0 / threshold
+
+    average_threat_score = total_threat_score / total_weight
     
-    # return average_threat_score
+    return average_threat_score
 
+def compute_iou(box1, box2):
+    a = Polygon(torch.t(box1)).convex_hull
+    b = Polygon(torch.t(box2)).convex_hull
+    
+    return a.intersection(b).area / a.union(b).area
 
 
 
