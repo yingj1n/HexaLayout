@@ -93,7 +93,7 @@ def to_eval(models, DEVICE):
         models[key].eval()
     return models
 
-def evaluation_layout(models, data_loader, device):
+def evaluation_layout(models, data_loader, device, bbox_labels=False):
     """
     Evaluate the model using thread score.
 
@@ -124,7 +124,7 @@ def evaluation_layout(models, data_loader, device):
             outputs["static"] = models["static_decoder"](encoded_features, is_training=False)
 
             roadmap_batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs["static"], road_image)
-            bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target)
+            bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target, bbox_labels)
 #             print(roadmap_batch_ts, bb_batch_ts)
             rm_ts_list.extend(roadmap_batch_ts)
             bb_ts_list.extend(bb_batch_ts)
@@ -132,9 +132,12 @@ def evaluation_layout(models, data_loader, device):
     return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), predicted_maps
 
 
-def get_ts_for_bb(model_output, target):
-    predicted_bb_map = (model_output > 0.5).view(-1, 800, 800)
-    # predicted_road_map = np.argmax(bev_output.cpu().detach().numpy(), axis=1).astype(bool)
+def get_ts_for_bb(model_output, target, bbox_labels):
+    if bbox_labels:
+        _, predicted_bb_map = model_output.max(1)
+        predicted_bb_map = predicted_bb_map.type(torch.BoolTensor)
+    else:
+        predicted_bb_map = (model_output > 0.5).view(-1, 800, 800)
 
     batch_ts = []
     for batch_index in range(len(target)):

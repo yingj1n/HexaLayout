@@ -224,7 +224,7 @@ for epoch in range(num_epochs):
         train_rm_ts_list.extend(batch_rm_ts)
         avg_train_rm_ts = sum(batch_rm_ts) / len(batch_rm_ts)
         
-        batch_bb_ts, _ = utils.get_ts_for_bb(outputs["dynamic"], target)
+        batch_bb_ts, _ = utils.get_ts_for_bb(outputs["dynamic"], target, opt.bbox_label)
         train_bb_ts_list.extend(batch_bb_ts)
         avg_train_bb_ts = sum(batch_bb_ts) / len(batch_bb_ts)
 
@@ -241,7 +241,7 @@ for epoch in range(num_epochs):
     # ===================log every epoch======================
     train_rm_ts = sum(train_rm_ts_list) / len(train_rm_ts_list)
     train_bb_ts = sum(train_bb_ts_list) / len(train_bb_ts_list)
-    val_rm_ts, val_bb_ts, _ = utils.evaluation_layout(models, val_loader, DEVICE)
+    val_rm_ts, val_bb_ts, _ = utils.evaluation_layout(models, val_loader, DEVICE, opt.bbox_label)
     time_this_epoch_min = (time.time() - start_time) / 60
     print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: ({:.4f},{:.4f}) , val_rm_ts: ({:.4f},{:.4f})'
           .format(epoch + 1, num_epochs, train_loss / sample_size,
