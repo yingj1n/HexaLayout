@@ -444,7 +444,11 @@ class UNetRoadMapNetwork_extend2(nn.Module):
 class RoadMapEncoder(nn.Module):
     def __init__(self,
                  single_blocks_sizes=[16, 32],
-                 single_depths=[2, 2]):
+                 single_depths=[2, 2],
+                 fusion_block_sizes=[256, 512],
+                 fusion_depths=[2, 2],
+                 fusion_out_feature=512,
+                ):
         super(RoadMapEncoder, self).__init__()
         #         self.bev_input_dim = bev_input_dim
 
@@ -461,10 +465,11 @@ class RoadMapEncoder(nn.Module):
 
         #         for i in range(len(self.single_encoder)):
         #             self.add_module('single_encoder_{}'.format(i), self.single_encoder[i])
-        self.fusion = nn.Sequential(
-            nn.Conv2d(single_blocks_sizes[-1], single_blocks_sizes[-1], kernel_size=1),
-            nn.ReLU(True),
-        )
+        self.fusion = FusionNetwork(
+            in_feature=single_blocks_sizes[-1],
+            blocks_sizes=fusion_block_sizes,
+            depths=fusion_depths,
+            out_features=fusion_out_feature)
 
 
     def forward(self, single_cam_input, verbose=False):
@@ -483,4 +488,65 @@ class RoadMapEncoder(nn.Module):
             print('fusion_out', x.shape)
 
         return x
+    
+    
+class RoadMapEncoder_temporal(nn.Module):
+    def __init__(self,
+                 single_blocks_sizes=[64, 128, 256],
+                 single_depths=[2, 2, 2],
+                 fusion_block_sizes=[256, 512],
+                 fusion_depths=[2, 2],
+                 fusion_out_feature=512,
+                 temporal_hidden=512,
+                 output_size=512):
+        super(RoadMapEncoder_temporal, self).__init__()
 
+        self.single_encoder = SingleImageCNN(
+            blocks_sizes=single_blocks_sizes,
+            depths=single_depths)
+
+        self.fusion_net = FusionNetwork(
+            in_feature=single_blocks_sizes[-1],
+            blocks_sizes=fusion_block_sizes,
+            depths=fusion_depths,
+            out_features=fusion_out_feature)
+
+        self.temporal_net = TemporalNetwork(
+            in_feature=fusion_out_feature,
+            hidden_feature=temporal_hidden,
+            out_feature=output_size)
+
+
+    def forward(self, single_cam_input, verbose=False):
+        encoder_outputs = []
+        for cam_input in single_cam_input:
+            output = self.single_encoder(cam_input, verbose)
+            encoder_outputs.append(output)
+
+        x = utils.combine_six_to_one(encoder_outputs)
+
+        if verbose:
+            print('concat_single', x.shape)
+
+        x = self.fusion_net(x, verbose)
+
+        if verbose:
+            print('fusion_output', x.shape)
+
+        x = torch.transpose(x, 1, 2)
+        x = torch.unbind(x, -1)[0]
+#         x = x.view(x.shape[0], 1, x.shape[1])  # turns out '.view' messes up the data distribution
+        if verbose:
+            print('reshaped', x.shape)
+
+        x = self.temporal_net(x)
+
+        if verbose:
+            print('temporal_output', x.shape)
+
+        x = torch.transpose(x, 1, 2)
+        x = torch.unsqueeze(x, 3)
+        if verbose:
+            print('reshaped', x.shape)
+#         x = x.view(x.shape[0], x.shape[2], 1, 1)
+        return x

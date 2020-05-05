@@ -54,11 +54,13 @@ def upsample(x):
 
 
 class Decoder(nn.Module):
-    def __init__(self, out_features):
+    def __init__(self,
+                 blocks_sizes=[16, 32, 64, 128, 256],
+                 out_features=1):
         super(Decoder, self).__init__()
         self.num_output_channels = out_features
         # self.num_ch_enc = num_ch_enc
-        self.num_ch_dec = np.array([16, 32, 64, 128, 256])
+        self.num_ch_dec = np.array(blocks_sizes)
         # self.num_ch_concat = np.array([64, 128, 256, 512, 128])
         # self.conv_mu = nn.Conv2d(128, 128, 3, 1, 1)
         # self.conv_log_sigma = nn.Conv2d(128, 128, 3, 1, 1)
@@ -67,7 +69,7 @@ class Decoder(nn.Module):
         self.convs = OrderedDict()
         for i in range(4, -1, -1):
             # upconv_0
-            num_ch_in = 256 if i == 4 else self.num_ch_dec[i + 1]
+            num_ch_in = blocks_sizes[-1] if i == 4 else self.num_ch_dec[i + 1]
             num_ch_out = self.num_ch_dec[i]
             # num_ch_concat = self.num_ch_concat[i]
             self.convs[("upconv", i, 0)] = nn.Conv2d(num_ch_in, num_ch_out, 3, 1, 1) #Conv3x3(num_ch_in, num_ch_out)

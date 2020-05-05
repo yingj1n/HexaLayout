@@ -21,7 +21,7 @@ import torchvision
 from torch.autograd import Variable
 
 # from model import RoadMapNetwork, LWRoadMapNetwork
-from model import RoadMapEncoder, UNetRoadMapNetwork, UNetRoadMapNetwork_extend, UNetRoadMapNetwork_extend2
+from model import RoadMapEncoder, RoadMapEncoder_temporal
 import utils
 import module_monolayout
 
@@ -34,6 +34,11 @@ parser.add_argument('--folder_dir', type=str, default='./')
 parser.add_argument('--verbose_dim', action='store_true')
 parser.add_argument('--train_batch_size', type=int, default=9)
 parser.add_argument('--bbox_label', action='store_true')
+# Add temporal element between encoder and decoder. This didn't work before for
+# roadmap only models (same two-lane outputs for all input), but I feel like this
+# could be helpful for predicting bbox maps, since with just 6 image without context,
+# it's hard to tell if there is a car from far away.
+parser.add_argument('--temporal', action='store_true') 
 opt = parser.parse_args()
 
 random.seed(888)
@@ -65,7 +70,6 @@ val_index_set = np.array([i for i in labeled_scene_index if i not in set(train_i
 # print(val_index_set) [106 109 111 113 116 120 123 127]
 # val_index_set = np.array([111, 116, 120])
 
-# transform = torchvision.transforms.ToTensor()
 # transform = torchvision.transforms.Compose(
 #     [torchvision.transforms.ToTensor(),
 #      torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -91,18 +95,21 @@ labeled_trainset = LabeledDataset(image_folder=image_folder,
                                   transform=transform,
                                   extra_info=True
                                   )
-# train_loader = torch.utils.data.DataLoader(
-#     labeled_trainset,
-#     batch_sampler=utils.RandomBatchSampler(
-#         sampler=torch.utils.data.SequentialSampler(labeled_trainset),
-#         batch_size=train_batch_size),
-#     num_workers=0, collate_fn=collate_fn)
 
-train_loader = torch.utils.data.DataLoader(labeled_trainset,
-                                           batch_size=train_batch_size,
-                                           shuffle=True, num_workers=0,
-                                           collate_fn=collate_fn)
+if opt.temporal:  # RandomBatchSampler ensures that the data is sequential within random batches.
+    train_loader = torch.utils.data.DataLoader(
+        labeled_trainset,
+        batch_sampler=utils.RandomBatchSampler(
+            sampler=torch.utils.data.SequentialSampler(labeled_trainset),
+            batch_size=train_batch_size),
+        num_workers=0, collate_fn=collate_fn)
+else:
+    train_loader = torch.utils.data.DataLoader(labeled_trainset,
+                                               batch_size=train_batch_size,
+                                               shuffle=True, num_workers=0,
+                                               collate_fn=collate_fn)
 
+    
 labeled_valset = LabeledDataset(image_folder=image_folder,
                                 annotation_file=annotation_csv,
                                 scene_index=val_index_set,
@@ -130,19 +137,49 @@ if opt.bbox_label:
     bbox_out_features = 10
     criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
 else:
-    bbox_out_features = 1
-    criterion_dynamic = nn.BCEWithLogitsLoss()
+    bbox_out_features = 2
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([0.9, 0.1]).to(DEVICE))
+    
+criterion_static = nn.CrossEntropyLoss()
 
-models = {'encoder': RoadMapEncoder(
-    single_blocks_sizes=[64, 128, 256],
-    single_depths=[2, 2, 2]),
-    'static_decoder': module_monolayout.Decoder(1),
-    'static_discr': module_monolayout.Discriminator(),
-    'dynamic_discr': module_monolayout.Discriminator(),
-    'dynamic_decoder': module_monolayout.Decoder(bbox_out_features)}
+blocks_sizes = [16, 64, 128, 256, 1024]
 
-# criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
-criterion_static = nn.BCEWithLogitsLoss()
+if opt.temporal:
+    models = {'encoder': RoadMapEncoder_temporal(
+        single_blocks_sizes=[64, 128, 256],
+        single_depths=[2, 2, 2],
+        fusion_block_sizes=[256, 512, 1024],
+        fusion_depths=[2, 2, 1],
+        fusion_out_feature=1024,
+        temporal_hidden=1024,
+        output_size=1024,
+    ),
+        'static_decoder': module_monolayout.Decoder(
+            blocks_sizes=blocks_sizes,
+            out_features=2),
+        'static_discr': module_monolayout.Discriminator(),
+        'dynamic_discr': module_monolayout.Discriminator(),
+        'dynamic_decoder': module_monolayout.Decoder(
+            blocks_sizes=blocks_sizes,
+            out_features=bbox_out_features)}
+else:
+    models = {'encoder': RoadMapEncoder(
+        single_blocks_sizes=[64, 128, 256],
+        single_depths=[2, 2, 2],
+        fusion_block_sizes=[256, 512, 1024],
+        fusion_depths=[2, 2, 1],
+        fusion_out_feature=1024
+    ),
+        'static_decoder': module_monolayout.Decoder(
+            blocks_sizes=blocks_sizes,
+            out_features=2),
+        'static_discr': module_monolayout.Discriminator(),
+        'dynamic_discr': module_monolayout.Discriminator(),
+        'dynamic_decoder': module_monolayout.Decoder(
+            blocks_sizes=blocks_sizes,
+            out_features=bbox_out_features)}
+
+
 
 parameters_discr = []
 parameters_other = []
@@ -184,7 +221,7 @@ for epoch in range(num_epochs):
     for batch, (sample, target, road_image, extra) in enumerate(train_loader):
         batch_size = len(sample)
         target_bb_map = torch.stack([utils.bounding_box_to_matrix_image(i, opt.bbox_label) for i in target]).to(DEVICE)
-        road_image_long = torch.stack(road_image).type(torch.FloatTensor).to(DEVICE)
+        road_image_long = torch.stack(road_image).type(torch.LongTensor).to(DEVICE)
 
         single_cam_inputs = []
         for i in range(num_images):
@@ -205,9 +242,10 @@ for epoch in range(num_epochs):
         if opt.bbox_label:
             loss_dynamic = criterion_dynamic(outputs["dynamic"], target_bb_map)
         else:
-            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800),
-                                             target_bb_map.type(torch.FloatTensor).to(DEVICE))
-        loss_static = criterion_static(outputs["static"].view(-1, 800, 800), road_image_long)
+#             print(outputs["dynamic"].shape, target_bb_map.shape)
+            loss_dynamic = criterion_dynamic(outputs["dynamic"],
+                                             target_bb_map.type(torch.LongTensor).to(DEVICE))
+        loss_static = criterion_static(outputs["static"], road_image_long)
         loss = loss_static + loss_dynamic
 
         # ===================backward====================
