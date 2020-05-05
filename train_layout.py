@@ -52,6 +52,9 @@ timezone = pytz.timezone("America/Los_Angeles")
 now_la = timezone.localize(now)
 timestampStr = now_la.strftime("%m-%d-%H-%M")
 
+
+# =================================Load data======================================
+
 # unlabeled_scene_index = np.arange(106)
 labeled_scene_index = np.arange(106, 134)
 
@@ -111,6 +114,8 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
                                          shuffle=True, num_workers=0,
                                          collate_fn=collate_fn)
 
+# =================================Initialize Model======================================
+
 # model = LWRoadMapNetwork(
 #     single_blocks_sizes=[64, 128, 256],
 #     single_depths=[1, 1, 1],
@@ -129,7 +134,7 @@ else:
     criterion_dynamic = nn.BCEWithLogitsLoss()
 
 models = {'encoder': RoadMapEncoder(
-    single_blocks_sizes=[16, 128, 256],
+    single_blocks_sizes=[64, 128, 256],
     single_depths=[2, 2, 2]),
     'static_decoder': module_monolayout.Decoder(1),
     'static_discr': module_monolayout.Discriminator(),
@@ -163,13 +168,13 @@ optimizer_other = torch.optim.Adam(parameters_other,
 #                                              requires_grad=False).float().to(DEVICE)
 
 
-## Training Loop
+# =================================Training Loop======================================
 learning_curve = []
 # model.to(DEVICE)
-val_ts_list = []
 for epoch in range(num_epochs):
     train_loss = 0
-    train_ts_list = []
+    train_rm_ts_list = []
+    train_bb_ts_list = []
     sample_size = 0
     start_time = time.time()
     batch_end_time = start_time
@@ -200,7 +205,8 @@ for epoch in range(num_epochs):
         if opt.bbox_label:
             loss_dynamic = criterion_dynamic(outputs["dynamic"], target_bb_map)
         else:
-            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800), target_bb_map.type(torch.FloatTensor).to(DEVICE))
+            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800),
+                                             target_bb_map.type(torch.FloatTensor).to(DEVICE))
         loss_static = criterion_static(outputs["static"].view(-1, 800, 800), road_image_long)
         loss = loss_static + loss_dynamic
 
@@ -213,40 +219,41 @@ for epoch in range(num_epochs):
         train_loss += loss.item() * batch_size
         sample_size += batch_size
         predicted_road_map = (outputs["static"] > 0.5).view(-1, 800, 800)
-        # predicted_bb_map = np.argmax(outputs["dynamic"].cpu().detach().numpy(), axis=1)
-        # TODO: turn bb map to bbox and measure ts
 
-
-        batch_ts, _ = utils.get_ts_for_batch_binary(outputs["static"], road_image)
-        train_ts_list.extend(batch_ts)
-        avg_train_ts = sum(batch_ts) / len(batch_ts)
+        batch_rm_ts, _ = utils.get_ts_for_batch_binary(outputs["static"], road_image)
+        train_rm_ts_list.extend(batch_rm_ts)
+        avg_train_rm_ts = sum(batch_rm_ts) / len(batch_rm_ts)
+        
+        batch_bb_ts, _ = utils.get_ts_for_bb(outputs["dynamic"], target)
+        train_bb_ts_list.extend(batch_bb_ts)
+        avg_train_bb_ts = sum(batch_bb_ts) / len(batch_bb_ts)
 
         batch_time = time.time() - batch_end_time
         batch_end_time = time.time()
         if batch % 10 == 0:
-            print('batch [{}], epoch [{}], loss: {:.4f}, time: {:.0f}s, ts: {:.4f}'
+            print('batch [{}], epoch [{}], loss: {:.4f}, time: {:.0f}s, ts: ({:.4f},{:.4f})'
                   .format(batch + 1, epoch + 1, train_loss / sample_size,
-                          batch_time, avg_train_ts))
+                          batch_time, avg_train_rm_ts, avg_train_bb_ts))
 
         # Empty Cache
         torch.cuda.empty_cache()
 
     # ===================log every epoch======================
-    train_ts = sum(train_ts_list) / len(train_ts_list)
-    val_ts, predicted_val_map = utils.evaluation_layout(models, val_loader, DEVICE)
+    train_rm_ts = sum(train_rm_ts_list) / len(train_rm_ts_list)
+    train_bb_ts = sum(train_bb_ts_list) / len(train_bb_ts_list)
+    val_rm_ts, val_bb_ts, _ = utils.evaluation_layout(models, val_loader, DEVICE)
     time_this_epoch_min = (time.time() - start_time) / 60
-    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: {:.4f}, val_ts: {:.4f}'
+    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: ({:.4f},{:.4f}) , val_rm_ts: ({:.4f},{:.4f})'
           .format(epoch + 1, num_epochs, train_loss / sample_size,
-                  time_this_epoch_min, time_this_epoch_min * (num_epochs - epoch - 1), train_ts, val_ts))
+                  time_this_epoch_min, time_this_epoch_min * (num_epochs - epoch - 1), train_rm_ts, train_bb_ts, val_rm_ts, val_bb_ts))
 
-    learning_curve.append((train_ts, val_ts.tolist()))
+    learning_curve.append((train_rm_ts, val_rm_ts.tolist(), train_bb_ts, val_bb_ts.tolist()))
     if epoch % 5 == 0 and epoch != 0:
         torch.save({
             'encoder': models['encoder'].state_dict(),
             'static_decoder': models['static_decoder'].state_dict(),
             'dynamic_decoder': models['dynamic_decoder'].state_dict(),
             'plot_cache': learning_curve,
-            'predicted_val_map': predicted_val_map
         },
             FOLDER_PATH + '/roadmap_models/roadmapnet_{}_{}.pth'.format(timestampStr, epoch))
 
@@ -255,6 +262,5 @@ torch.save({
     'static_decoder': models['static_decoder'].state_dict(),
     'dynamic_decoder': models['dynamic_decoder'].state_dict(),
     'plot_cache': learning_curve,
-    'predicted_val_map': predicted_val_map
 },
     FOLDER_PATH + '/roadmap_models/roadmapnet_{}_final.pth'.format(timestampStr))

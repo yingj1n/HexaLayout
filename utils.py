@@ -3,6 +3,7 @@ from tqdm import tqdm
 import numpy as np
 import torch
 from torch.autograd import Variable
+import skimage.measure
 # import cv2
 
 import code.helper as helper
@@ -105,7 +106,8 @@ def evaluation_layout(models, data_loader, device):
         Predicted classification results.
     """
     models = to_eval(models, device)
-    ts_list = []
+    rm_ts_list = []
+    bb_ts_list = []
     predicted_maps = []
     with torch.no_grad():
         for sample, target, road_image, extra in tqdm(data_loader):
@@ -118,13 +120,29 @@ def evaluation_layout(models, data_loader, device):
 
             encoded_features = models['encoder'](single_cam_inputs)
             outputs = {}
-            outputs["dynamic"] = models["dynamic_decoder"](encoded_features)
-            outputs["static"] = models["static_decoder"](encoded_features)
+            outputs["dynamic"] = models["dynamic_decoder"](encoded_features, is_training=False)
+            outputs["static"] = models["static_decoder"](encoded_features, is_training=False)
 
-            batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs["static"], road_image)
-            ts_list.extend(batch_ts)
+            roadmap_batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs["static"], road_image)
+            bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target)
+#             print(roadmap_batch_ts, bb_batch_ts)
+            rm_ts_list.extend(roadmap_batch_ts)
+            bb_ts_list.extend(bb_batch_ts)
             predicted_maps.append(predicted_road_map)
-    return np.nanmean(ts_list), predicted_maps
+    return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), predicted_maps
+
+
+def get_ts_for_bb(model_output, target):
+    predicted_bb_map = (model_output > 0.5).view(-1, 800, 800)
+    # predicted_road_map = np.argmax(bev_output.cpu().detach().numpy(), axis=1).astype(bool)
+
+    batch_ts = []
+    for batch_index in range(len(target)):
+        predicted_boxes = image_to_bbox(predicted_bb_map[batch_index].cpu())
+        sample_ts = helper.compute_ats_bounding_boxes(predicted_boxes,
+                                               target[batch_index]['bounding_box'])
+        batch_ts.append(sample_ts)
+    return batch_ts, predicted_bb_map
 
 
 def get_ts_for_batch(model_output, road_image):
@@ -219,6 +237,27 @@ def bounding_box_to_matrix_image(one_target, labels=True):
                 else:
                     bounding_box_map[-i][j] = 1
     return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
+
+
+def image_to_bbox(image):
+    labe = skimage.measure.label(image)
+    region_proposals = skimage.measure.regionprops(labe)
+    num_bbox = len(region_proposals)
+    bboxes = np.zeros([num_bbox, 2, 4])
+
+    for i, rp in enumerate(region_proposals):
+        raw_bb = np.array(rp.bbox)
+        raw_bb[-2:] = raw_bb[-2:] - 1 # Since bbox in rp is upperbound exclusive
+        y_min, x_min, y_max, x_max = (raw_bb - 400) / 10
+        bbox = np.array([x_min, x_min, x_max, x_max, -y_min, -y_max, -y_min, -y_max]).reshape(2,4)
+        bboxes[i] = bbox
+
+    if bboxes.any():
+        return torch.from_numpy(bboxes)
+    else:  # Return the entire canvas when no bbox is being identified.
+        bboxes = np.zeros([1, 2, 4])
+        bboxes[0] = np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2,4)
+        return torch.from_numpy(bboxes)
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.
