@@ -67,7 +67,7 @@ def evaluation(models, data_loader, device, dynamic_label): ## changed to add bb
     ts_list = []
     predicted_static_maps = []
     predicted_dynamic_maps = []
-    iou_list = []
+    #iou_list = []
     dynamic_ts_list = []
     with torch.no_grad():
         for sample, target, road_image, extra in tqdm(data_loader):
@@ -83,10 +83,9 @@ def evaluation(models, data_loader, device, dynamic_label): ## changed to add bb
             outputs['dynamic'] = models['dynamic'](encoded_features)
 
             # dynamic
-            bbox_matrix= torch.tensor(bounding_box_to_matrix_image(target[0], dynamic_label)).to(device) 
-            _, output_dynamic_pred = torch.max(outputs['dynamic'], dim = 1)
-            mean_iou = compute_bbox_matrix_iou(output_dynamic_pred, bbox_matrix)
-
+            # bbox_matrix= torch.tensor(bounding_box_to_matrix_image(target[0], dynamic_label)).to(device) 
+            # _, output_dynamic_pred = torch.max(outputs['dynamic'], dim = 1)
+            # mean_iou = compute_bbox_matrix_iou(output_dynamic_pred, bbox_matrix)
             bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target, dynamic_label)
             # static
             batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs['static'], road_image)
@@ -95,10 +94,10 @@ def evaluation(models, data_loader, device, dynamic_label): ## changed to add bb
             ts_list.extend(batch_ts)
             predicted_static_maps.append(predicted_road_map)
             predicted_dynamic_maps.append(predicted_bb_map)
-            iou_list.append(mean_iou)
+            #iou_list.append(mean_iou)
             dynamic_ts_list.extend(bb_batch_ts)
         
-    return np.nanmean(ts_list), predicted_static_maps, np.average(iou_list), np.nanmean(dynamic_ts_list), predicted_dynamic_maps
+    return np.nanmean(ts_list), predicted_static_maps, np.nanmean(dynamic_ts_list), predicted_dynamic_maps
 
 
 def get_ts_for_bb(model_output, target, bbox_labels):
@@ -214,7 +213,7 @@ def matrix_to_bbox(image, verbose = False):
     if verbose:
         print('input image shape', image.shape)
         print('partial input image', image[:3,:3])
-    print('number of bbox to return: ', num_bbox)
+        print('number of bbox to return: ', num_bbox)
     bboxes = np.zeros([num_bbox, 2, 4])
     
     for i, rp in enumerate(region_proposals):

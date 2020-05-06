@@ -265,17 +265,30 @@ class RoadMapNetwork(nn.Module):
 ##############################################################################
 
 # encoder: the same 
-class MonoEncoder(nn.Module):
+class RoadEncoder(nn.Module):
     def __init__(self, 
                 single_blocks_sizes = [16, 32, 64],
-                single_depths = [2, 2, 2]):
+                single_depths = [2, 2, 2], 
+                fusion_block_sizes = [256, 512],
+                fusion_depths =  [2, 2],
+                fusion_out_feature= 512,
+                fusion_on = False):
 
-        super(MonoEncoder, self).__init__()
+        super(RoadEncoder, self).__init__()
 
         self.single_encoder = SingleImageCNN(
             blocks_sizes = single_blocks_sizes,
             depths = single_depths,
         )
+        # whether to turn on fusion layer, not applicable with 
+        # unet decoders, 
+        self.fusion_on = fusion_on
+        if self.fusion_on: 
+            self.fusion = FusionNetwork(
+                in_feature=single_blocks_sizes[-1],
+                blocks_sizes=fusion_block_sizes,
+                depths=fusion_depths,
+                out_features=fusion_out_feature)
 
     def forward(self, single_cam_input,  verbose=False):
         encoder_outputs = []
@@ -286,7 +299,13 @@ class MonoEncoder(nn.Module):
         x = utils.combine_six_to_one(encoder_outputs) ### try with other combining methods 
 
         if verbose:
-            print('encoder output', x.shape)
+            print('combined single encoders output', x.shape)
+        
+        if self.fusion_on: 
+            x = self.fusion(x)
+
+            if verbose:
+                print('fusion layer output', x.shape)
 
         return x
 
@@ -329,7 +348,6 @@ class MonoDecoder(nn.Module):
         # self.conv_mu = nn.Conv2d(128, 128, 3, 1, 1)
         # self.conv_log_sigma = nn.Conv2d(128, 128, 3, 1, 1)
         outputs = {}
-        # decoder
         self.convs = OrderedDict()
         for i in range(4, -1, -1):
             # upconv_0
@@ -339,7 +357,6 @@ class MonoDecoder(nn.Module):
             self.convs[("upconv", i, 0)] = nn.Conv2d(num_ch_in, num_ch_out, 3, 1, 1) #Conv3x3(num_ch_in, num_ch_out)
             self.convs[("norm", i, 0)] = nn.BatchNorm2d(num_ch_out)
             self.convs[("relu", i, 0)] =  nn.ReLU(True)
-
             # upconv_1
             self.convs[("upconv", i, 1)] = nn.Conv2d(num_ch_out, num_ch_out, 3, 1, 1) #ConvBlock(num_ch_out, num_ch_out)
             self.convs[("norm", i, 1)] = nn.BatchNorm2d(num_ch_out)
@@ -354,7 +371,6 @@ class MonoDecoder(nn.Module):
             x = self.convs[("norm", i, 0)](x)
             x = self.convs[("relu", i, 0)](x)
             x = upsample(x)
-            #x = torch.cat((x, features[i-6]), 1)
             x = self.convs[("upconv", i, 1)](x)
             x = self.convs[("norm", i, 1)](x)
        
@@ -400,33 +416,6 @@ class UnetDecoder(nn.Module):
             print('interpolate', x.shape)
 
         return x
-
-# class UnetDecoder_static(nn.Module):
-#     def __init__(self, 
-#                 single_block_size_output = 64,
-#                 unet_start_filts=64,
-#                 unet_depth=5
-#                 ):
-#         super(UnetDecoder_static, self).__init__()
-
-#         self.u_net_static = UNet(num_classes=1,
-#                             in_channels=single_block_size_output,
-#                             depth=unet_depth,
-#                             start_filts=unet_start_filts, up_mode='transpose',
-#                             merge_mode='concat')
-
-#     def forward(self, encoder_output, verbose = False):
-        
-#         x = self.u_net_static(encoder_output, verbose)
-#         if verbose:
-#             print('decoder output', x.shape)
-
-#         x = F.interpolate(x, size=(800, 800), mode='bilinear', align_corners=False)
-
-#         if verbose:
-#             print('interpolate', x.shape)
-
-#         return x
 
 
 #####################################################################################
