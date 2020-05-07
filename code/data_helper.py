@@ -11,6 +11,9 @@ import torchvision
 
 from .helper import convert_map_to_lane_map, convert_map_to_road_map
 
+# Need to change dataset class for it to be consistent with
+# Mono_model encoder and decoder
+
 NUM_SAMPLE_PER_SCENE = 126
 NUM_IMAGE_PER_SAMPLE = 6
 image_names = [
@@ -125,6 +128,7 @@ class LabeledDataset(torch.utils.data.Dataset):
         target = {}
         target['bounding_box'] = torch.as_tensor(corners).view(-1, 2, 4)
         target['category'] = torch.as_tensor(categories)
+        
 
         if self.extra_info:
             actions = data_entries.action_id.to_numpy()
