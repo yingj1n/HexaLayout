@@ -3,8 +3,13 @@ from tqdm import tqdm
 import numpy as np
 import torch
 from torch.autograd import Variable
+import torch.nn as nn
+import torchvision
 import skimage.measure
+from layers import disp_to_depth  # Source from monodepth2
 # import cv2
+
+import PIL.Image as pil
 
 import code.helper as helper
 import code.data_helper as data_helper
@@ -51,11 +56,12 @@ class RandomBatchSampler(torch.utils.data.Sampler):
 
 def evaluation(model, data_loader, device):
     """
-    Evaluate the model using thread score.
+    Evaluate the roadmap model using thread score.
 
     Args:
         model: A trained pytorch model.
         data_loader: The dataloader for a labeled dataset.
+        device: the torch.device to evaluation on
 
     Returns:
         Average threat score for the entire data set.
@@ -74,7 +80,7 @@ def evaluation(model, data_loader, device):
                 single_cam_inputs.append(single_cam_input)
 
             bev_output = model(single_cam_inputs)
-            batch_ts, predicted_road_map = get_ts_for_batch_binary(bev_output, road_image)
+            batch_ts, predicted_road_map = get_rm_ts_for_batch_binary(bev_output, road_image)
             ts_list.extend(batch_ts)
             predicted_maps.append(predicted_road_map)
     return np.nanmean(ts_list), predicted_maps
@@ -93,13 +99,19 @@ def to_eval(models, DEVICE):
         models[key].eval()
     return models
 
-def evaluation_layout(models, data_loader, device, bbox_labels=False):
+
+def evaluation_layout(models, data_loader, device, bbox_labels=False,
+                      depth=False, encoder_model_list=None, depth_decoder_model_list=None):
     """
-    Evaluate the model using thread score.
+    Evaluate the layout model using thread score.
 
     Args:
         model: A trained pytorch model.
         data_loader: The dataloader for a labeled dataset.
+        device: the torch.device to evaluation on
+        bbox_labels: whether to use 10 bbox labels (as opposed to treating all as 1
+        depth: whether to add depth in input
+        encoder_model_list, depth_decoder_model_list: only applicable if depth = True
 
     Returns:
         Average threat score for the entire data set.
@@ -115,7 +127,14 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False):
             single_cam_inputs = []
             for i in range(num_images):
                 single_cam_input = torch.stack([batch[i] for batch in sample])
-                single_cam_input = Variable(single_cam_input).to(device)
+                if depth:
+                    single_cam_input = torch.stack([batch[i] for batch in sample])
+                    depth_out = get_predicted_depth(encoder_model_list[i],
+                                                    depth_decoder_model_list[i],
+                                                    single_cam_input, device)
+                    single_cam_input = Variable(torch.cat((single_cam_input.to(device), depth_out), 1))
+                else:
+                    single_cam_input = Variable(single_cam_input).to(device)
                 single_cam_inputs.append(single_cam_input)
 
             encoded_features = models['encoder'](single_cam_inputs)
@@ -125,11 +144,39 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False):
 
             roadmap_batch_ts, predicted_road_map = get_rm_ts_for_batch(outputs["static"], road_image)
             bb_batch_ts, predicted_bb_map = get_bb_ts_for_batch(outputs["dynamic"], target)
-#             print(roadmap_batch_ts, bb_batch_ts)
+            #             print(roadmap_batch_ts, bb_batch_ts)
             rm_ts_list.extend(roadmap_batch_ts)
             bb_ts_list.extend(bb_batch_ts)
-            predicted_maps.append(predicted_road_map)
-    return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), predicted_maps
+            predicted_maps.append(predicted_road_map)  # useless
+
+    return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), None
+
+
+def get_predicted_depth(encoder_model, decoder_model, single_sam_samples, device):
+    depth_width = 320
+    depth_height = 256
+    original_width = 306
+    original_height = 256
+    transform = torchvision.transforms.ToTensor()
+    input_for_depth_list = []
+    for j in range(len(single_sam_samples)):
+        im = single_sam_samples[j]
+        pil_im = torchvision.transforms.ToPILImage()(im)
+        # the required input size for depth model is 320 * 256
+        pil_im = pil_im.resize((depth_width, depth_height), pil.LANCZOS)
+        input_for_depth_list.append(transform(pil_im))
+    input_for_depth = torch.stack(input_for_depth_list).to(device)
+    # Get outputs of depth model
+    with torch.no_grad():
+        d_features = encoder_model(input_for_depth)
+        disp_outputs = decoder_model(d_features)[("disp", 0)]
+    # We need to change the outputs dimension back to original dimension
+    disp_resized = nn.functional.interpolate(disp_outputs, (original_height, original_width), mode="bilinear",
+                                             align_corners=False)
+    # Now we need to transfer the output disparity map to depth map
+    _, depth_out = disp_to_depth(disp_resized, 1, 40)  # We set min depth to be 1 and max depth be 40
+    # Reproduce the only channel 3 times for it to match with encoder
+    return depth_out
 
 
 def get_bb_ts_for_batch(model_output, target):
@@ -140,7 +187,7 @@ def get_bb_ts_for_batch(model_output, target):
     for batch_index in range(len(target)):
         predicted_boxes = image_to_bbox(predicted_bb_map[batch_index].cpu())
         sample_ts = helper.compute_ats_bounding_boxes(predicted_boxes,
-                                               target[batch_index]['bounding_box'])
+                                                      target[batch_index]['bounding_box'])
         batch_ts.append(sample_ts)
     return batch_ts, predicted_bb_map
 
@@ -255,16 +302,16 @@ def image_to_bbox(image):
 
     for i, rp in enumerate(region_proposals):
         raw_bb = np.array(rp.bbox)
-        raw_bb[-2:] = raw_bb[-2:] - 1 # Since bbox in rp is upperbound exclusive
+        raw_bb[-2:] = raw_bb[-2:] - 1  # Since bbox in rp is upperbound exclusive
         y_min, x_min, y_max, x_max = (raw_bb - 400) / 10
-        bbox = np.array([x_min, x_min, x_max, x_max, -y_min, -y_max, -y_min, -y_max]).reshape(2,4)
+        bbox = np.array([x_min, x_min, x_max, x_max, -y_min, -y_max, -y_min, -y_max]).reshape(2, 4)
         bboxes[i] = bbox
 
     if bboxes.any():
         return torch.from_numpy(bboxes)
     else:  # Return the entire canvas when no bbox is being identified.
         bboxes = np.zeros([1, 2, 4])
-        bboxes[0] = np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2,4)
+        bboxes[0] = np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2, 4)
         return torch.from_numpy(bboxes)
 
 # Some functions used to project 6 images and combine into one.

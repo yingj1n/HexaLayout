@@ -11,9 +11,9 @@ from module_resnet import ResNetEncoder
 
 
 class SingleImageCNN(nn.Module):
-    def __init__(self, blocks_sizes=[64, 128, 256], depths=[2, 2, 2]):
+    def __init__(self, blocks_sizes=[64, 128, 256], depths=[2, 2, 2], in_feature=3):
         super(SingleImageCNN, self).__init__()
-        self.convencoder = ResNetEncoder(3, blocks_sizes=blocks_sizes, depths=depths)
+        self.convencoder = ResNetEncoder(in_feature, blocks_sizes=blocks_sizes, depths=depths)
 
     def forward(self, x, verbose=False):
         x = F.interpolate(x, size=(256, 256), mode='bilinear', align_corners=False)
@@ -443,6 +443,7 @@ class UNetRoadMapNetwork_extend2(nn.Module):
 
 class RoadMapEncoder(nn.Module):
     def __init__(self,
+                 single_in_feature=3,
                  single_blocks_sizes=[16, 32],
                  single_depths=[2, 2],
                  fusion_block_sizes=[256, 512],
@@ -457,7 +458,8 @@ class RoadMapEncoder(nn.Module):
 
         self.single_encoder = SingleImageCNN(
             blocks_sizes=single_blocks_sizes,
-            depths=single_depths)
+            depths=single_depths,
+            in_feature=single_in_feature)
 
         #         self.single_encoder = {image_idx: SingleImageCNN(
         #             blocks_sizes=single_blocks_sizes,
@@ -492,6 +494,7 @@ class RoadMapEncoder(nn.Module):
     
 class RoadMapEncoder_temporal(nn.Module):
     def __init__(self,
+                 single_in_feature=3,
                  single_blocks_sizes=[64, 128, 256],
                  single_depths=[2, 2, 2],
                  fusion_block_sizes=[256, 512],
@@ -503,7 +506,8 @@ class RoadMapEncoder_temporal(nn.Module):
 
         self.single_encoder = SingleImageCNN(
             blocks_sizes=single_blocks_sizes,
-            depths=single_depths)
+            depths=single_depths,
+            in_feature=single_in_feature)
 
         self.fusion_net = FusionNetwork(
             in_feature=single_blocks_sizes[-1],
