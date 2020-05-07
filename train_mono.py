@@ -22,7 +22,7 @@ from torch.autograd import Variable
 
 # from model import RoadMapNetwork, LWRoadMapNetwork
 #from model import UNetRoadMapNetwork, UNetRoadMapNetwork_extend, UNetRoadMapNetwork_extend2
-from model import RoadEncoder, MonoDecoder, UnetDecoder
+from model import RoadEncoder, MonoDecoder, UnetDecoder, Discriminator2, Discriminator
 import utils
 
 import code.data_helper as data_helper
@@ -36,8 +36,8 @@ parser.add_argument('--folder_dir', type=str, default='./')
 
 ## training 
 parser.add_argument('--train_batch_size', type=int, default=9)
-parser.add_argument('--num_dynamic_labels', type=int, default=1,
-                    choices=[1, 10])
+parser.add_argument('--num_dynamic_labels', type=int, default=2,
+                    choices=[2, 10])
 
 ## loss
 parser.add_argument("--scheduler_step_size", type=int, default=5,
@@ -88,7 +88,7 @@ num_images = data_helper.NUM_IMAGE_PER_SAMPLE
 train_batch_size = opt.train_batch_size
 val_batch_size = 1
 num_epochs = 200
-#num_epochs = 1
+
 
 # The labeled dataset can only be retrieved by sample.
 # And all the returned data are tuple of tensors, since bounding boxes may have different size
@@ -117,11 +117,7 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
                                          shuffle=False, num_workers=0,
                                          collate_fn=collate_fn)
 
-
-
-################################## SPECIFY YOUR MODEL HERE ##############################
-
-# define model
+# ====================== model ==============================
 models = {}
 fusion_block_sizes = [256, 512, 1024]
 single_blocks_sizes = [64, 128, 256]
@@ -142,40 +138,47 @@ models['dynamic'] = UnetDecoder(single_block_size_output = single_blocks_sizes[-
 # models['static'] = MonoDecoder(single_block_size_output = fusion_block_sizes[-1], features = 2, fusion_on = True) 
 # models['dynamic'] = MonoDecoder(single_block_size_output = fusion_block_sizes[-1], features = opt.num_dynamic_labels, fusion_on = True)  
 
-# models['discriminator'] = Discriminator()
 
-# define loss func
+models['static_dis'] = Discriminator(input_channel = 2)
+models['dynamic_dis'] = Discriminator(input_channel = opt.num_dynamic_labels)
+# ======================= loss ===============================
 #criterion_static = nn.BCEWithLogitsLoss()
 criterion_static = nn.CrossEntropyLoss()
 if opt.num_dynamic_labels == 10:   
     criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))## l2 loss
 else: 
-    criterion_dynamic = nn.BCEWithLogitsLoss()
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 15]).to(DEVICE))
+criterion_discriminator = nn.BCEWithLogitsLoss()
 
+
+# ===================== optimization ==============================
 parameters_to_train = []
 parameters_to_train_disc = []
 for key in models.keys():
     models[key].to(DEVICE)
-    if 'disc' in key:
+    if 'dis' in key:
         parameters_to_train_disc += list(models[key].parameters())
     else:
         parameters_to_train += list(models[key].parameters())
 
-
-# TODO: add discri layer + seperate learning rate
 model_optimizer = torch.optim.Adam(parameters_to_train,
                             lr=opt.learning_rate,
                             weight_decay=1e-5)
-
 model_lr_scheduler = torch.optim.lr_scheduler.StepLR(model_optimizer, 
             opt.scheduler_step_size, 0.1)
 
-# discri_optimizer = torch.optim.Adam(parameters_to_train_disc,
-#                             lr=opt.learning_rate,
-#                             weight_decay=1e-5)
-# discri_lr_scheduler = torch.optim.lr_scheduler.StepLR(discri_optimizer, 
-#             opt.scheduler_step_size, 0.1)
-#########################################################################################
+discri_optimizer = torch.optim.Adam(parameters_to_train_disc,
+                            lr=opt.learning_rate,
+                            weight_decay=1e-5)
+discri_lr_scheduler = torch.optim.lr_scheduler.StepLR(discri_optimizer, 
+            opt.scheduler_step_size, 0.1)
+
+
+patch = (1, 800 // 2**4, 800 // 2**4)
+valid = Variable(torch.Tensor(np.ones((opt.train_batch_size, *patch))),
+                                                requires_grad=False).float().to(DEVICE)
+fake  = Variable(torch.Tensor(np.zeros((opt.train_batch_size, *patch))),
+                                                requires_grad=False).float().to(DEVICE)
 
 
 
@@ -196,7 +199,7 @@ for epoch in range(num_epochs):
     sample_size = 0
     start_time = time.time()
     batch_end_time = start_time
-
+    train_discri_loss = 0
     for batch, (sample, target, road_image, extra) in enumerate(train_loader):
         batch_size = len(sample)
 
@@ -218,24 +221,50 @@ for epoch in range(num_epochs):
         # true 
         road_image_long = torch.stack(road_image).type(torch.LongTensor).to(DEVICE) # torch.Size([9, 800, 800]) 
         bbox_matrix_long = torch.stack([utils.bounding_box_to_matrix_image(i, opt.num_dynamic_labels) for i in target]).to(DEVICE) # torch.Size([9, 800, 800])
-        if opt.verbose:
-            print('static & dynamic ground truth shape', road_image_long.shape, bbox_matrix_long.shape)
-            print('static & dynamic prediction shape', outputs['static'].shape, outputs['dynamic'].shape)
-        # loss
-        if opt.num_dynamic_labels == 10:  
-            loss_dynamic = criterion_dynamic(outputs['dynamic'], bbox_matrix_long)
+        if opt.num_dynamic_labels == 10:
+            bbox_matrix_discri = torch.stack([utils.bounding_box_to_3d_matrix_image(i, opt.num_dynamic_labels) for i in target]).to(DEVICE)
+            print('bbox_matrix_discri shape & type', bbox_matrix_discri.shape, bbox_matrix_discri.dtype)
         else:
-            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800).type(torch.float32).to(DEVICE), bbox_matrix_long.type(torch.float32).to(DEVICE))
+            bbox_matrix_discri = utils.road_map_to_3d_matrix(bbox_matrix_long).to(DEVICE)
+        road_image_discri = utils.road_map_to_3d_matrix(road_image_long).to(DEVICE)
+        if opt.verbose:
+            #print('static & dynamic ground truth shape', road_image_long.shape, bbox_matrix_long.shape)
+            print('static & dynamic prediction shape & type', outputs['static'].shape, outputs['dynamic'].shape, outputs['dynamic'].dtype)
+            #print('true discri shape',bbox_matrix_discri.shape, road_image_discri.shape)
+        # discriminator
+        fake_pred_static = models['static_dis'](outputs['static']) 
+        fake_pred_dynamic = models['dynamic_dis'](outputs['dynamic'])
+        real_pred_static = models['static_dis'](road_image_discri)
+        real_pred_dynamic = models['dynamic_dis'](bbox_matrix_discri.type(torch.FloatTensor))
+        if opt.verbose:
+            print('static pred & ground discirminator shape', fake_pred_static.shape, real_pred_static.shape)
+            print('dynamic pred & ground discirminator shape', real_pred_static.shape, real_pred_dynamic.shape)
+            # should return ranges between [0,1] with shape (batchsize, 800, 800) 
+        # loss
         loss_static = criterion_static(outputs['static'], road_image_long)
+        if opt.num_dynamic_labels == 10:
+           loss_dynamic = criterion_dynamic(outputs["dynamic"], bbox_matrix_long)
+        else:
+            loss_dynamic = criterion_dynamic(outputs["dynamic"], bbox_matrix_long.type(torch.LongTensor).to(DEVICE))
+        loss_dis_static = criterion_discriminator(fake_pred_static.to(DEVICE), fake) + criterion_discriminator(real_pred_static.to(DEVICE), valid)
+        loss_dis_dynamic = criterion_discriminator(fake_pred_dynamic.to(DEVICE), fake) + criterion_discriminator(real_pred_dynamic.to(DEVICE), valid)
+
         total_loss = loss_dynamic + loss_static
+        total_discri_loss = loss_dis_static + loss_dis_dynamic
         # ===================backward====================
         model_optimizer.zero_grad()
-        total_loss.backward()
+        discri_optimizer.zero_grad()
+        total_loss.backward(retain_graph=True)
         model_optimizer.step()
+
+        total_discri_loss.backward()
+        discri_optimizer.step()
+
         # ===================log========================
         train_dynamic_loss += loss_dynamic.item() * batch_size
         train_static_loss += loss_static.item() * batch_size
         total_train_loss += train_dynamic_loss + train_static_loss
+        train_discri_loss += total_discri_loss.item() * batch_size
         sample_size += batch_size
         # static
         batch_ts, _ = utils.get_ts_for_batch_binary(outputs["static"], road_image)
@@ -245,33 +274,38 @@ for epoch in range(num_epochs):
         current_batch_dynamic_ts, _ = utils.get_ts_for_bb(outputs["dynamic"], target, opt.num_dynamic_labels)
         train_dynamic_ts.extend(current_batch_dynamic_ts)
         avg_dynamic_ts_batch = sum(current_batch_dynamic_ts) / batch_size
+        
         # log
         batch_time = time.time() - batch_end_time
         batch_end_time = time.time()
         if batch % 10 == 0:
             print('batch [{}], epoch [{}], loss: {:.4f}, \
-                  time: {:.0f}s, static_ts: {:.4f}, dynamic_ts: {:.4f}\
+                  time: {:.0f}s, static_ts: {:.4f}, dynamic_ts: {:.4f}, discri_loss : {:.4f}\
                   '
                   .format(batch + 1, epoch + 1, total_train_loss / sample_size,
-                          batch_time, avg_train_ts, avg_dynamic_ts_batch))
+                          batch_time, avg_train_ts, avg_dynamic_ts_batch, train_discri_loss / sample_size
+                          ))
             if opt.verbose:
                 print(f'dynamic loss: {train_dynamic_loss/sample_size}, \
                         static loss: {train_static_loss/sample_size}')
         # Empty Cache
         torch.cuda.empty_cache()
 
+    # update lr
+    model_lr_scheduler.step()
+    discri_lr_scheduler.step()
     # ===================log every epoch======================
     train_ts_static = sum(train_static_ts) / len(train_static_ts)
     train_ts_dynamic = sum(train_dynamic_ts) / len(train_dynamic_ts)
+    #train_discri = sum(train_discri_loss) / len(train_discri_loss)
     val_ts_static, predicted_val_map_st , val_ts_dynamic, predicted_val_map_dy = utils.evaluation(models, val_loader, DEVICE, opt.num_dynamic_labels)
     time_this_epoch_min = (time.time() - start_time) / 60
     print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, \
         train_static_ts: {:.4f}, val_static_ts: {:.4f}, \
-        train_dynamic_ts: {:.4f}, val_dynamic_ts: {:.4f}, \
-        '
+        train_dynamic_ts: {:.4f}, val_dynamic_ts: {:.4f}'
           .format(epoch + 1, num_epochs, total_train_loss / sample_size,
                   time_this_epoch_min, time_this_epoch_min * (num_epochs - epoch - 1), 
-                  train_ts_static, val_ts_static, train_ts_dynamic, val_ts_dynamic,
+                  train_ts_static, val_ts_static, train_ts_dynamic, val_ts_dynamic
                   ))
 
     learning_curve_st.append((train_ts_static, val_ts_static.tolist()))

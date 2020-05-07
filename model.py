@@ -417,6 +417,86 @@ class UnetDecoder(nn.Module):
 
         return x
 
+# discriminator 
+
+
+class Discriminator(nn.Module):
+    def __init__(self, input_channel = 2):
+        super(Discriminator, self).__init__()
+        self.main = nn.Sequential(
+            # input is (nc) x 64 x 64
+            nn.Conv2d(input_channel, 8, 3, 2, 1, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf) x 32 x 32
+            nn.Conv2d(8, 16, 3, 2, 1, 1, bias=False),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*2) x 16 x 16
+            nn.Conv2d(16, 32, 3, 2, 1, 1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*4) x 8 x 8
+            nn.Conv2d(32, 8, 3, 2, 1, 1, bias=False),
+            nn.BatchNorm2d(8),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*8) x 4 x 4
+            nn.Conv2d(8, 1, 3, 1, 1, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, input, verbose=False):
+        x = self.main(input)
+        if verbose:
+            print('discriminator shape', x.shape)
+        #x = F.interpolate(x, size= (800,800), mode='bilinear', align_corners=False )
+        return x
+
+class Discriminator2(nn.Module):
+    def __init__(self, input_ch):
+        super(Discriminator2, self).__init__()
+
+        self.num_output_channels = 1
+        self.num_ch_dec = np.array([64, 128, 256, 256, 512, 512])
+
+        self.convs = OrderedDict()
+
+        self.convs[("conv", 0)] = nn.Conv2d(input_ch, self.num_ch_dec[0], 3, 2, 1)
+        self.convs[("lrelu", 0)] =  nn.LeakyReLU(0.2, True)
+
+        for i in range(1, 6):
+            num_ch_in = self.num_ch_dec[i - 1]
+            num_ch_out = self.num_ch_dec[i]
+            self.convs[("conv", i)] = nn.Conv2d(num_ch_in, num_ch_out, 3, 2, 1)
+            self.convs[("norm", i)] = nn.BatchNorm2d(num_ch_out)
+            self.convs[("lrelu", i)] =  nn.LeakyReLU(0.2, True)
+
+
+        self.convs["linear"] = nn.Linear(2048, 1)
+        self.encoder = nn.ModuleList(list(self.convs.values()))
+
+
+    def forward(self, input_image, verbose=False):
+
+        x = self.convs[("conv", 0)](input_image)
+        x = self.convs[("lrelu", 0)](x)
+
+        for i in range(1, 6):
+            x = self.convs[("conv", i)](x)
+            x = self.convs["norm", i](x)
+            x = self.convs["lrelu", i](x)
+
+        N, C, H, W = x.size()
+        x = x.view(N, -1) 
+
+        self.output = self.convs["linear"](x)
+        if verbose:
+            print('discriminator output ', self.outupt.shape)
+        
+        x = F.interpolate(self.output, size=(800, 800), mode='bilinear', align_corners=False)
+
+        if verbose:
+            print('interpolate after discri.', x.shape)
+        return x
 
 #####################################################################################
 #####################################################################################

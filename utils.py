@@ -183,7 +183,7 @@ def combine_six_to_one(samples):
             ], dim=-2), k=3, dims=(-2, -1))
 
 
-def bounding_box_to_matrix_image(one_target, labels=True):
+def bounding_box_to_matrix_image(one_target, num_labels=10):
     """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
     Args:
         one_target: target[i] TODO
@@ -198,12 +198,44 @@ def bounding_box_to_matrix_image(one_target, labels=True):
         # print(min_x, max_x, min_y, max_y)
         for i in range(int(min_x), int(max_x)):
             for j in range(int(min_y), int(max_y)):
-                if labels:
+                if num_labels == 10:
                     bounding_box_map[-i][j] = label + 1
                 else:
                     bounding_box_map[-i][j] = 1
     return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
 
+def bounding_box_to_3d_matrix_image(one_target, num_labels=10):
+    """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
+    Args:
+        one_target: target[i] TODO
+    Returns: TODO
+    """
+    bounding_box_map = np.zeros((num_labels, 800, 800))
+    bounding_box_map[0] = 1 # mark all background into 1
+    for idx, bb in enumerate(one_target['bounding_box']):
+        label = one_target['category'][idx]
+        min_y, min_x = np.floor((bb * 10 + 400).numpy().min(axis=1))
+        max_y, max_x = np.ceil((bb * 10 + 400).numpy().max(axis=1))
+        # print(min_x, max_x, min_y, max_y)
+        for i in range(int(min_x), int(max_x)):
+            for j in range(int(min_y), int(max_y)):
+                bounding_box_map[label+1][-i][j] = 1
+                bounding_box_map[0][-i][j] = 0
+    return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
+
+def road_map_to_3d_matrix(matrix):
+    '''
+    takes in a batch of matrices and return a 4d matrices by adding a dimension and one hot encoding road/non-road
+    :input: matrix, a dim of batch * H * W matrices with 0's and 1's
+    :output: matrix_3d, a dim of batch * 2 * H * W matrices one hot encoded road/non-road matrices. 
+    '''
+    # print('input matrix shape', matrix.shape)
+    # print('matrix[0]', matrix[0].shape, type(matrix[0]))
+    batch, x, y = matrix.shape
+    matrix_3d = torch.empty(batch, 2, x, y)
+    for i in range(batch):
+        matrix_3d[i, :, :, :] = torch.stack((matrix[i], 1 - matrix[i]), 0)
+    return matrix_3d
 
 def matrix_to_bbox(image, verbose = False):
     image = image.cpu()
@@ -309,7 +341,22 @@ def compute_iou(box1, box2):
     
     return a.intersection(b).area / a.union(b).area
 
-
+def matrix_2d_to_3d(matrix, num_classes = 2):
+    ''' 
+    Use this function to tweek grond truth matrices to a three dimensional matrices,
+    from (H * W) to (num_classes * H * W), which in each dimension it is hot encoded features
+    :param matrix: a 2d np array
+    :num_classes : number of classes in this matrix
+    :output: return a 3d np array that one hot encoded each category
+    '''
+    x, y = matrix.shape
+    output = np.zeros((num_classes, x, y))
+    for i in range(num_classes):
+        for xx in range(x):
+            for yy in range(y):
+                if matrix[xx][yy] == i:
+                    output[i, xx, yy] = 1
+    return torch.from_numpy(output).type(torch.LongTensor)
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.

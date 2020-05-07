@@ -307,7 +307,7 @@ class Encoder(nn.Module):
         x = self.conv2(x)
         x = self.pool(x)
         return x
-        
+
 
 class Discriminator(nn.Module):
     def __init__(self):
@@ -362,7 +362,7 @@ class Discriminator2(nn.Module):
         self.encoder = nn.ModuleList(list(self.convs.values()))
 
 
-    def forward(self, input_image):
+    def forward(self, input_image, verbose=False):
 
         x = self.convs[("conv", 0)](input_image)
         x = self.convs[("lrelu", 0)](x)
@@ -376,5 +376,7 @@ class Discriminator2(nn.Module):
         x = x.view(N, -1) 
 
         self.output = self.convs["linear"](x)
+        if verbose:
+            print('discriminator output ', self.outupt.shape)
 
         return self.output    
