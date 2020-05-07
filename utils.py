@@ -214,7 +214,7 @@ def combine_six_to_one(samples):
              ], dim=-2), k=3, dims=(-2, -1))
 
 
-def bounding_box_to_matrix_image(one_target, labels=True):
+def bounding_box_to_matrix_image(one_target, labels=True, outter=True):
     """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
 
     Args:
@@ -227,8 +227,16 @@ def bounding_box_to_matrix_image(one_target, labels=True):
 
     for idx, bb in enumerate(one_target['bounding_box']):
         label = one_target['category'][idx]
-        min_y, min_x = np.floor((bb * 10 + 400).numpy().min(axis=1))
-        max_y, max_x = np.ceil((bb * 10 + 400).numpy().max(axis=1))
+        if outter:
+            min_y, min_x = np.ceil((bb * 10 + 400).numpy().min(axis=1))
+            max_y, max_x = np.floor((bb * 10 + 400).numpy().max(axis=1))
+        else:
+            min_y, min_x = (bb * 10 + 400).numpy().min(axis=1)
+            max_y, max_x = (bb * 10 + 400).numpy().max(axis=1)
+            others_y = [i * 10 + 400 for i in bb[0].numpy() if i * 10 + 400 not in (min_y, max_y)]
+            others_x = [i * 10 + 400 for i in bb[1].numpy() if i * 10 + 400 not in (min_x, max_x)]
+            min_y, max_y = np.floor(min(others_y)), np.ceil(max(others_y))
+            min_x, max_x = np.floor(min(others_x)), np.ceil(max(others_x))
         # print(min_x, max_x, min_y, max_y)
         for i in range(int(min_x), int(max_x)):
             for j in range(int(min_y), int(max_y)):

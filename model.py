@@ -49,10 +49,10 @@ class FusionNetwork(nn.Module):
         if verbose:
             print('fusion_conv_out', x.shape)
 
-        x = self.avgpool(x)
+#         x = self.avgpool(x)
 
-        #         x = x.view(-1, self.n_feature)
-        x = self.linear(x)
+#         #         x = x.view(-1, self.n_feature)
+#         x = self.linear(x)
 
         return x
 

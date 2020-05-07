@@ -135,10 +135,10 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
 
 if opt.bbox_label:
     bbox_out_features = 10
-    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
+    criterion_dynamic = nn.CrossEntropyLoss() #weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
 else:
     bbox_out_features = 2
-    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 15]).to(DEVICE))
+    criterion_dynamic = nn.CrossEntropyLoss() #weight=torch.FloatTensor([1, 15]).to(DEVICE))
     
 criterion_static = nn.CrossEntropyLoss()
 
@@ -164,10 +164,10 @@ if opt.temporal:
             out_features=bbox_out_features)}
 else:
     models = {'encoder': RoadMapEncoder(
-        single_blocks_sizes=[64, 128, 256],
-        single_depths=[2, 2, 2],
-        fusion_block_sizes=[256, 512, 1024],
-        fusion_depths=[2, 2, 1],
+        single_blocks_sizes=[64, 128, 256, 512],
+        single_depths=[2, 2, 2, 2],
+        fusion_block_sizes=[512, 1024],
+        fusion_depths=[1, 1],
         fusion_out_feature=1024
     ),
         'static_decoder': module_monolayout.Decoder(
@@ -220,7 +220,10 @@ for epoch in range(num_epochs):
     models = utils.to_train(models, DEVICE)
     for batch, (sample, target, road_image, extra) in enumerate(train_loader):
         batch_size = len(sample)
-        target_bb_map = torch.stack([utils.bounding_box_to_matrix_image(i, opt.bbox_label) for i in target]).to(DEVICE)
+        target_bb_map = torch.stack([utils.bounding_box_to_matrix_image(
+            i,
+            opt.bbox_label,
+            outter=False) for i in target]).to(DEVICE)
         road_image_long = torch.stack(road_image).type(torch.LongTensor).to(DEVICE)
 
         single_cam_inputs = []
@@ -242,11 +245,11 @@ for epoch in range(num_epochs):
         if opt.bbox_label:
             loss_dynamic = criterion_dynamic(outputs["dynamic"], target_bb_map)
         else:
-#             print(outputs["dynamic"].shape, target_bb_map.shape)
+#             print(np.unique(target_bb_map.type(torch.LongTensor).numpy()))
             loss_dynamic = criterion_dynamic(outputs["dynamic"],
                                              target_bb_map.type(torch.LongTensor).to(DEVICE))
         loss_static = criterion_static(outputs["static"], road_image_long)
-        loss = loss_static + loss_dynamic
+        loss = loss_static + 10*loss_dynamic
 
         # ===================backward====================
         optimizer_other.zero_grad()
@@ -280,7 +283,7 @@ for epoch in range(num_epochs):
     train_bb_ts = sum(train_bb_ts_list) / len(train_bb_ts_list)
     val_rm_ts, val_bb_ts, _ = utils.evaluation_layout(models, val_loader, DEVICE, opt.bbox_label)
     time_this_epoch_min = (time.time() - start_time) / 60
-    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: ({:.4f},{:.4f}) , val_rm_ts: ({:.4f},{:.4f})'
+    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: ({:.4f},{:.4f}) , val_ts: ({:.4f},{:.4f})'
           .format(epoch + 1, num_epochs, train_loss / sample_size,
                   time_this_epoch_min, time_this_epoch_min * (num_epochs - epoch - 1), train_rm_ts, train_bb_ts, val_rm_ts, val_bb_ts))
 
