@@ -22,8 +22,7 @@ from torch.autograd import Variable
 
 import PIL.Image as pil
 import module_monodepth2
-from layers import disp_to_depth # Source from monodepth2
-
+from layers import disp_to_depth  # Source from monodepth2
 
 # from model import RoadMapNetwork, LWRoadMapNetwork
 from model import RoadMapEncoder, RoadMapEncoder_temporal
@@ -44,7 +43,7 @@ parser.add_argument('--bbox_label', action='store_true')
 # roadmap only models (same two-lane outputs for all input), but I feel like this
 # could be helpful for predicting bbox maps, since with just 6 image without context,
 # it's hard to tell if there is a car from far away.
-parser.add_argument('--temporal', action='store_true') 
+parser.add_argument('--temporal', action='store_true')
 opt = parser.parse_args()
 
 random.seed(888)
@@ -63,7 +62,6 @@ timezone = pytz.timezone("America/Los_Angeles")
 now_la = timezone.localize(now)
 timestampStr = now_la.strftime("%m-%d-%H-%M")
 
-
 # =================================Load data======================================
 
 # unlabeled_scene_index = np.arange(106)
@@ -81,10 +79,10 @@ val_index_set = np.array([i for i in labeled_scene_index if i not in set(train_i
 #      torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
 #                                       std=[0.229, 0.224, 0.225])])
 
-transform = torchvision.transforms.Compose(
-    [torchvision.transforms.ToTensor(),
-     torchvision.transforms.Normalize(mean=(0.5, 0.5, 0.5),
-                                      std=(0.5, 0.5, 0.5))])
+transform = torchvision.transforms.ToTensor()
+
+trans_normalize = torchvision.transforms.Normalize(mean=(0.5, 0.5, 0.5),
+                                                   std=(0.5, 0.5, 0.5))
 
 num_images = data_helper.NUM_IMAGE_PER_SAMPLE
 train_batch_size = opt.train_batch_size
@@ -120,7 +118,6 @@ else:
                                                shuffle=True, num_workers=0,
                                                collate_fn=collate_fn)
 
-    
 labeled_valset = LabeledDataset(image_folder=image_folder,
                                 annotation_file=annotation_csv,
                                 scene_index=val_index_set,
@@ -146,11 +143,11 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
 
 if opt.bbox_label:
     bbox_out_features = 10
-    criterion_dynamic = nn.CrossEntropyLoss() #weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
+    criterion_dynamic = nn.CrossEntropyLoss()  # weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
 else:
     bbox_out_features = 2
-    criterion_dynamic = nn.CrossEntropyLoss() #weight=torch.FloatTensor([1, 15]).to(DEVICE))
-    
+    criterion_dynamic = nn.CrossEntropyLoss()  # weight=torch.FloatTensor([1, 15]).to(DEVICE))
+
 criterion_static = nn.CrossEntropyLoss()
 
 blocks_sizes = [16, 64, 128, 256, 1024]
@@ -180,7 +177,7 @@ else:
         single_blocks_sizes=[64, 128, 256, 512],
         single_depths=[2, 2, 2, 2],
         fusion_block_sizes=[512, 1024],
-        fusion_depths=[1, 1],
+        fusion_depths=[2, 1],
         fusion_out_feature=1024
     ),
         'static_decoder': module_monolayout.Decoder(
@@ -192,14 +189,13 @@ else:
             blocks_sizes=blocks_sizes,
             out_features=bbox_out_features)}
 
-
 # Load self-supervised depth models
 # Model file downloadable from https://drive.google.com/open?id=1-6AAukq9NpknKdiPvGQJUSSpRWJrtCH5
 depth_model_path = os.path.join(opt.depth_model_dir, 'all_depth_models.pth')
 
 encoder_model_list = [module_monodepth2.ResnetEncoder(18, False) for i in range(6)]
 depth_decoder_model_list = [module_monodepth2.DepthDecoder(num_ch_enc=encoder_model_list[0].num_ch_enc,
-                                                  scales=range(4)) for i in range(6)]
+                                                           scales=range(4)) for i in range(6)]
 
 depth_model_weights = torch.load(depth_model_path)
 for i in range(6):
@@ -211,7 +207,6 @@ for i in range(6):
     depth_decoder_model_list[i].load_state_dict(depth_model_weights[i]['decoder'])
     depth_decoder_model_list[i].to(DEVICE)
     depth_decoder_model_list[i].eval()
-
 
 # Initialize optimizers (TODO: discriminators
 
@@ -262,14 +257,13 @@ for epoch in range(num_epochs):
 
         single_cam_inputs = []
         for i in range(num_images):
-            single_cam_input = torch.stack([batch[i] for batch in sample])  #[b, 3, 256, 306]
+            single_cam_input = torch.stack([batch[i] for batch in sample])  # [b, 3, 256, 306]
             depth_out = utils.get_predicted_depth(encoder_model_list[i],
-                                                depth_decoder_model_list[i],
-                                                single_cam_input, DEVICE)  #[b, 1, 256, 306]
-            single_cam_input = Variable(torch.cat((single_cam_input.to(DEVICE), depth_out), 1))  #[b, 4, 256, 306]
-            single_cam_input = Variable(single_cam_input).to(DEVICE)
+                                                  depth_decoder_model_list[i],
+                                                  single_cam_input, DEVICE)  # [b, 1, 256, 306]
+            single_cam_input = torch.stack([trans_normalize(batch) for batch in single_cam_input])
+            single_cam_input = Variable(torch.cat((single_cam_input.to(DEVICE), depth_out), 1))  # [b, 4, 256, 306]
             single_cam_inputs.append(single_cam_input)
-
 
         # ===================forward=====================
         encoded_features = models['encoder'](single_cam_inputs, opt.verbose_dim)
@@ -279,15 +273,15 @@ for epoch in range(num_epochs):
 
         if opt.verbose_dim:
             print(outputs["dynamic"].shape, outputs["static"].shape)
-        
+
         if opt.bbox_label:
             loss_dynamic = criterion_dynamic(outputs["dynamic"], target_bb_map)
         else:
-#             print(np.unique(target_bb_map.type(torch.LongTensor).numpy()))
+            #             print(np.unique(target_bb_map.type(torch.LongTensor).numpy()))
             loss_dynamic = criterion_dynamic(outputs["dynamic"],
                                              target_bb_map.type(torch.LongTensor).to(DEVICE))
         loss_static = criterion_static(outputs["static"], road_image_long)
-        loss = loss_static + 10*loss_dynamic
+        loss = loss_static + 20 * loss_dynamic
 
         # ===================backward====================
         optimizer_other.zero_grad()
@@ -301,7 +295,7 @@ for epoch in range(num_epochs):
         batch_rm_ts, _ = utils.get_rm_ts_for_batch(outputs["static"], road_image)
         train_rm_ts_list.extend(batch_rm_ts)
         avg_train_rm_ts = sum(batch_rm_ts) / len(batch_rm_ts)
-        
+
         batch_bb_ts, _ = utils.get_bb_ts_for_batch(outputs["dynamic"], target)
         train_bb_ts_list.extend(batch_bb_ts)
         avg_train_bb_ts = sum(batch_bb_ts) / len(batch_bb_ts)
@@ -323,9 +317,11 @@ for epoch in range(num_epochs):
                                                       depth=True, encoder_model_list=encoder_model_list,
                                                       depth_decoder_model_list=depth_decoder_model_list)
     time_this_epoch_min = (time.time() - start_time) / 60
-    print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: ({:.4f},{:.4f}) , val_ts: ({:.4f},{:.4f})'
-          .format(epoch + 1, num_epochs, train_loss / sample_size,
-                  time_this_epoch_min, time_this_epoch_min * (num_epochs - epoch - 1), train_rm_ts, train_bb_ts, val_rm_ts, val_bb_ts))
+    print(
+        'epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, train_ts: ({:.4f},{:.4f}) , val_ts: ({:.4f},{:.4f})'
+        .format(epoch + 1, num_epochs, train_loss / sample_size,
+                time_this_epoch_min, time_this_epoch_min * (num_epochs - epoch - 1), train_rm_ts, train_bb_ts,
+                val_rm_ts, val_bb_ts))
 
     learning_curve.append((train_rm_ts, val_rm_ts.tolist(), train_bb_ts, val_bb_ts.tolist()))
     if epoch % 5 == 0 and epoch != 0:

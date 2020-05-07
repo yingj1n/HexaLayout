@@ -121,6 +121,8 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False,
     rm_ts_list = []
     bb_ts_list = []
     predicted_maps = []
+    trans_normalize = torchvision.transforms.Normalize(mean=(0.5, 0.5, 0.5),
+                                                       std=(0.5, 0.5, 0.5))
     with torch.no_grad():
         for sample, target, road_image, extra in tqdm(data_loader):
             # target_bb_map = torch.stack([bounding_box_to_matrix_image(i) for i in target]).to(device)
@@ -132,8 +134,10 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False,
                     depth_out = get_predicted_depth(encoder_model_list[i],
                                                     depth_decoder_model_list[i],
                                                     single_cam_input, device)
+                    single_cam_input = torch.stack([trans_normalize(batch) for batch in single_cam_input])
                     single_cam_input = Variable(torch.cat((single_cam_input.to(device), depth_out), 1))
                 else:
+                    single_cam_input = torch.stack([trans_normalize(batch) for batch in single_cam_input])
                     single_cam_input = Variable(single_cam_input).to(device)
                 single_cam_inputs.append(single_cam_input)
 
