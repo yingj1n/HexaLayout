@@ -6,7 +6,7 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torchvision
 import skimage.measure
-from layers import disp_to_depth  # Source from monodepth2
+from dl_final_project.layers import disp_to_depth  # Source from monodepth2
 # import cv2
 
 import PIL.Image as pil
@@ -15,6 +15,29 @@ import code.helper as helper
 import code.data_helper as data_helper
 
 num_images = data_helper.NUM_IMAGE_PER_SAMPLE
+
+import sklearn.metrics as metrics
+
+
+def get_accuracy_auc_for_batch(outputs, targets):
+    accuracy = []
+    aucs = []
+    m = nn.Softmax(dim=1)
+    output_pos_prob = m(outputs)
+    _, predicted_map = outputs.max(1)
+    predicted_map = predicted_map.type(torch.BoolTensor)
+
+    for i, target in enumerate(targets):
+        
+        acc = metrics.accuracy_score(target.flatten().detach().cpu(),
+                                     predicted_map[i].flatten().detach().cpu())
+        accuracy.append(acc)
+        fpr, tpr, thresholds = metrics.roc_curve(
+            target.flatten().detach().cpu(),
+            output_pos_prob[i][1].flatten().detach().cpu(), pos_label=1)
+        auc = metrics.auc(fpr, tpr)
+        aucs.append(auc)
+    return accuracy, aucs
 
 
 class RandomBatchSampler(torch.utils.data.Sampler):
@@ -120,12 +143,17 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False,
     models = to_eval(models, device)
     rm_ts_list = []
     bb_ts_list = []
+    rm_acc_list = []
+    rm_auc_list = []
+    bb_acc_list = []
+    bb_auc_list = []
     predicted_maps = []
     trans_normalize = torchvision.transforms.Normalize(mean=(0.5, 0.5, 0.5),
                                                        std=(0.5, 0.5, 0.5))
     with torch.no_grad():
         for sample, target, road_image, extra in tqdm(data_loader):
             # target_bb_map = torch.stack([bounding_box_to_matrix_image(i) for i in target]).to(device)
+            target_bb_map = torch.stack([bounding_box_to_matrix_image(i, True) for i in target]).to(device)
             single_cam_inputs = []
             for i in range(num_images):
                 single_cam_input = torch.stack([batch[i] for batch in sample])
@@ -137,23 +165,32 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False,
                     single_cam_input = torch.stack([trans_normalize(batch) for batch in single_cam_input])
                     single_cam_input = Variable(torch.cat((single_cam_input.to(device), depth_out), 1))
                 else:
-                    single_cam_input = torch.stack([trans_normalize(batch) for batch in single_cam_input])
+#                     single_cam_input = torch.stack([trans_normalize(batch) for batch in single_cam_input])
                     single_cam_input = Variable(single_cam_input).to(device)
                 single_cam_inputs.append(single_cam_input)
 
             encoded_features = models['encoder'](single_cam_inputs)
             outputs = {}
-            outputs["dynamic"] = models["dynamic_decoder"](encoded_features, is_training=False)
-            outputs["static"] = models["static_decoder"](encoded_features, is_training=False)
+            outputs["dynamic"] = models["dynamic_decoder"](encoded_features)
+            outputs["static"] = models["static_decoder"](encoded_features)
 
             roadmap_batch_ts, predicted_road_map = get_rm_ts_for_batch(outputs["static"], road_image)
+            rm_batch_accu, rm_batch_auc = get_accuracy_auc_for_batch(outputs["static"], road_image)
             bb_batch_ts, predicted_bb_map = get_bb_ts_for_batch(outputs["dynamic"], target)
+            bb_batch_accu, bb_batch_auc = get_accuracy_auc_for_batch(outputs["dynamic"], target_bb_map)
             #             print(roadmap_batch_ts, bb_batch_ts)
             rm_ts_list.extend(roadmap_batch_ts)
+            rm_acc_list.extend(rm_batch_accu)
+            rm_auc_list.extend(rm_batch_auc)
             bb_ts_list.extend(bb_batch_ts)
+            bb_acc_list.extend(bb_batch_accu)
+            bb_auc_list.extend(bb_batch_auc)
             predicted_maps.append(predicted_road_map)  # useless
+            
+        accu_auc = {'rm': [np.nanmean(rm_acc_list), np.nanmean(rm_auc_list)],
+                    'bb': [np.nanmean(bb_acc_list), np.nanmean(bb_auc_list)]}
 
-    return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), None
+    return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), accu_auc
 
 
 def get_predicted_depth(encoder_model, decoder_model, single_sam_samples, device):
