@@ -77,6 +77,53 @@ class RandomBatchSampler(torch.utils.data.Sampler):
             return (len(self.sampler) + self.batch_size - 1) // self.batch_size
 
 
+def evaluation_unet(models, data_loader, device, dynamic_label): ## changed to add bbox matrix prediction
+    """
+    Evaluate the model using thread score.
+    Args:
+        model: A trained pytorch model.
+        data_loader: The dataloader for a labeled dataset.
+    Returns:
+        verage threat score for the entire data set.
+        Predicted classification results.
+    """
+    for key in models.keys():
+        models[key].to(device)
+        models[key].eval()
+    ts_list = []
+    predicted_static_maps = []
+    predicted_dynamic_maps = []
+    #iou_list = []
+    dynamic_ts_list = []
+    with torch.no_grad():
+        for i, (sample, target, road_image, extra) in enumerate(data_loader):
+            if i % 50 == 0:
+                print('-'*10,'evaluation at sample', i,'-'*10)
+            single_cam_inputs = []
+            for i in range(num_images):
+                single_cam_input = torch.stack([batch[i] for batch in sample])
+                single_cam_input = Variable(single_cam_input).to(device)
+                single_cam_inputs.append(single_cam_input)
+            
+            encoded_features = models['encode'](single_cam_inputs)
+            outputs= {}
+            outputs['static'] = models['static'](encoded_features)
+            outputs['dynamic'] = models['dynamic'](encoded_features)
+
+            # dynamic
+            bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target, dynamic_label)
+            # static
+            batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs['static'], road_image)
+           
+            # log 
+            ts_list.extend(batch_ts)
+            predicted_static_maps.append(predicted_road_map)
+            predicted_dynamic_maps.append(predicted_bb_map)
+            dynamic_ts_list.extend(bb_batch_ts)
+        
+    return np.nanmean(ts_list), predicted_static_maps, np.nanmean(dynamic_ts_list), predicted_dynamic_maps
+
+
 def evaluation(model, data_loader, device):
     """
     Evaluate the roadmap model using thread score.
@@ -354,6 +401,53 @@ def image_to_bbox(image):
         bboxes = np.zeros([1, 2, 4])
         bboxes[0] = np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2, 4)
         return torch.from_numpy(bboxes)
+
+
+
+def bounding_box_to_3d_matrix_image(one_target, num_labels=10):
+    """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
+    Args:
+        one_target: target[i] TODO
+    Returns: TODO
+    """
+    bounding_box_map = np.zeros((num_labels, 800, 800))
+    bounding_box_map[0] = 1 # mark all background into 1
+    for idx, bb in enumerate(one_target['bounding_box']):
+        label = one_target['category'][idx]
+        min_y, min_x = np.floor((bb * 10 + 400).numpy().min(axis=1))
+        max_y, max_x = np.ceil((bb * 10 + 400).numpy().max(axis=1))
+        # print(min_x, max_x, min_y, max_y)
+        for i in range(int(min_x), int(max_x)):
+            for j in range(int(min_y), int(max_y)):
+                bounding_box_map[label+1][-i][j] = 1
+                bounding_box_map[0][-i][j] = 0
+    return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
+
+def road_map_to_3d_matrix(matrix):
+    '''
+    takes in a batch of matrices and return a 4d matrices by adding a dimension and one hot encoding road/non-road
+    :input: matrix, a dim of batch * H * W matrices with 0's and 1's
+    :output: matrix_3d, a dim of batch * 2 * H * W matrices one hot encoded road/non-road matrices. 
+    '''
+    # print('input matrix shape', matrix.shape)
+    # print('matrix[0]', matrix[0].shape, type(matrix[0]))
+    batch, x, y = matrix.shape
+    matrix_3d = torch.empty(batch, 2, x, y)
+    for i in range(batch):
+        matrix_3d[i, :, :, :] = torch.stack((matrix[i], 1 - matrix[i]), 0)
+    return matrix_3d
+
+def matrix_to_3d_matrix(matrix):
+    '''
+    takes in a batch of matrices and return a 4d matrices by adding a dimension and one hot encoding road/non-road
+    :input: matrix, a dim of batch * H * W matrices with 0's and 1's
+    :output: matrix_3d, a dim of batch * 2 * H * W matrices one hot encoded road/non-road matrices. 
+    '''
+    batch, H, W = matrix.shape
+    matrix_3d = torch.zeros((batch,1,H,W))
+    matrix_3d = matrix[:, None,:,:]
+    return matrix_3d
+
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.
