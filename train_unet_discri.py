@@ -202,7 +202,7 @@ for epoch in range(num_epochs):
             bbox_matrix_discri = torch.stack([utils.bounding_box_to_3d_matrix_image(i, opt.num_dynamic_labels) for i in target]).to(DEVICE)
         else:
             bbox_matrix_discri = utils.matrix_to_3d_matrix(bbox_matrix_long).to(DEVICE)
-        road_image_discri = utils.matrix_to_3d_matrix(road_image_long).to(DEVICE))
+        road_image_discri = utils.matrix_to_3d_matrix(road_image_long).to(DEVICE)
         outputs['static_discri'] = outputs['static'].clone()
         outputs['dynamic_discri'] = outputs['dynamic'].clone()
         fake_pred_static = models['static_dis'](outputs['static_discri'].to(DEVICE)) 

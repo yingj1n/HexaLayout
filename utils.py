@@ -6,7 +6,7 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torchvision
 import skimage.measure
-from dl_final_project.layers import disp_to_depth  # Source from monodepth2
+# from dl_final_project.layers import disp_to_depth  # Source from monodepth2
 # import cv2
 
 import PIL.Image as pil
@@ -448,6 +448,67 @@ def matrix_to_3d_matrix(matrix):
     matrix_3d = matrix[:, None,:,:]
     return matrix_3d
 
+
+def get_ts_for_batch_binary(model_output, road_image):
+    """Get average threat score for a mini-batch.
+    Args:
+        model_output: A matrix as the output from the classification model with a shape of
+            (batch_size, num_classes, height, width).
+        road_image: A matrix as the truth for the batch with a shape of
+            (batch_size, height, width).
+    Returns:
+        Average threat score.
+    """
+
+    predicted_road_map = (model_output > 0.5).view(-1, 800, 800)
+ 
+    batch_ts = []
+    for batch_index in range(len(road_image)):
+        sample_ts = helper.compute_ts_road_map(predicted_road_map[batch_index].cpu(),
+                                               road_image[batch_index])
+        batch_ts.append(sample_ts)
+    return batch_ts, predicted_road_map
+
+def get_ts_for_bb(model_output, target, bbox_labels):
+    if bbox_labels == 10:
+        _, predicted_bb_map = model_output.max(1)
+        predicted_bb_map = predicted_bb_map.type(torch.BoolTensor)
+    else:
+        predicted_bb_map = (model_output > 0.5).view(-1, 800, 800)
+
+    batch_ts = []
+    for batch_index in range(len(target)):
+        predicted_boxes = matrix_to_bbox(predicted_bb_map[batch_index].cpu())
+        sample_ts = helper.compute_ats_bounding_boxes(predicted_boxes,
+                                               target[batch_index]['bounding_box'])
+        batch_ts.append(sample_ts)
+    return batch_ts, predicted_bb_map
+
+
+def matrix_to_bbox(image, verbose = False):
+    image = image.cpu()
+    label = skimage.measure.label(image)
+    region_proposals = skimage.measure.regionprops(label)
+    num_bbox = len(region_proposals)
+    if verbose:
+        print('input image shape', image.shape)
+        print('partial input image', image[:3,:3])
+        print('number of bbox to return: ', num_bbox)
+    bboxes = np.zeros([num_bbox, 2, 4])
+    
+    for i, rp in enumerate(region_proposals):
+        raw_bb = np.array(rp.bbox)
+        raw_bb[-2:] = raw_bb[-2:] - 1 # Since bbox in rp is upperbound exclusive
+        y_min, x_min, y_max, x_max = (raw_bb - 400) / 10
+        bbox = np.array([x_min, x_min, x_max, x_max, -y_min, -y_max, -y_min, -y_max]).reshape(2,4)
+        bboxes[i] = bbox
+    
+    if num_bbox:
+        return torch.from_numpy(bboxes)
+    else: # Return the entire canvas when no bbox is being identified.
+        bboxes = np.zeros([1, 2, 4])
+        bboxes[0] = np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2,4)
+        return torch.from_numpy(bboxes)
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.
