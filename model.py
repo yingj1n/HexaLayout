@@ -417,7 +417,38 @@ class UnetDecoder(nn.Module):
 
         return x
 
+    
 
+class Discriminator(nn.Module):
+    def __init__(self, input_channel = 2):
+        super(Discriminator, self).__init__()
+        self.main = nn.Sequential(
+            # input is (nc) x 64 x 64
+            nn.Conv2d(input_channel, 8, 3, 2, 1, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf) x 32 x 32
+            nn.Conv2d(8, 16, 3, 2, 1, 1, bias=False),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*2) x 16 x 16
+            nn.Conv2d(16, 32, 3, 2, 1, 1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*4) x 8 x 8
+            nn.Conv2d(32, 8, 3, 2, 1, 1, bias=False),
+            nn.BatchNorm2d(8),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*8) x 4 x 4
+            nn.Conv2d(8, 1, 3, 1, 1, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, input, verbose=False):
+        x = self.main(input)
+        if verbose:
+            print('discriminator shape', x.shape)
+        #x = F.interpolate(x, size= (800,800), mode='bilinear', align_corners=False )
+        return x
 #####################################################################################
 #####################################################################################
 #####################################################################################

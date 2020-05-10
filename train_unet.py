@@ -87,7 +87,7 @@ transform = torchvision.transforms.Compose(
 num_images = data_helper.NUM_IMAGE_PER_SAMPLE
 train_batch_size = opt.train_batch_size
 val_batch_size = 1
-num_epochs = 200
+num_epochs = 50
 #num_epochs = 1
 
 # The labeled dataset can only be retrieved by sample.
@@ -123,30 +123,24 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
 
 # define model
 models = {}
-fusion_block_sizes = [256, 512, 1024]
 single_blocks_sizes = [64, 128, 256]
 models['encode'] = RoadEncoder(
                     single_blocks_sizes = single_blocks_sizes, ### TODO: try with different state-of-art in-out channels 
-                    single_depths = [2,2, 2],
-                    fusion_block_sizes = [256, 512, 1024] ,
-                    fusion_depths = [2, 2, 1] ,
-                    fusion_out_feature = fusion_block_sizes[-1],
+                    single_depths = [2,2,2]
                     )
 # quick test:
 models['static'] = UnetDecoder(single_block_size_output = single_blocks_sizes[-1], 
-                                num_objects = 2) 
+                                 num_objects = 1) 
 models['dynamic'] = UnetDecoder(single_block_size_output = single_blocks_sizes[-1], 
-                                num_objects = opt.num_dynamic_labels,
-                                )  
+                                 num_objects = opt.num_dynamic_labels)  
 
-# models['static'] = MonoDecoder(single_block_size_output = fusion_block_sizes[-1], features = 2, fusion_on = True) 
-# models['dynamic'] = MonoDecoder(single_block_size_output = fusion_block_sizes[-1], features = opt.num_dynamic_labels, fusion_on = True)  
+#models['static'] = MonoDecoder(single_block_size_output = single_blocks_sizes[-1], features = 2) 
+#models['dynamic'] = MonoDecoder(single_block_size_output = single_blocks_sizes[-1], features = opt.num_dynamic_labels)  
 
 # models['discriminator'] = Discriminator()
 
 # define loss func
-#criterion_static = nn.BCEWithLogitsLoss()
-criterion_static = nn.CrossEntropyLoss()
+criterion_static = nn.BCEWithLogitsLoss()
 if opt.num_dynamic_labels == 10:   
     criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))## l2 loss
 else: 
@@ -155,7 +149,6 @@ else:
 parameters_to_train = []
 parameters_to_train_disc = []
 for key in models.keys():
-    models[key].to(DEVICE)
     if 'disc' in key:
         parameters_to_train_disc += list(models[key].parameters())
     else:
@@ -185,12 +178,14 @@ learning_curve_dy = []
 
 print('model initialized')
 for epoch in range(num_epochs):
+    for key in models.keys():
+        models[key].to(DEVICE)
+        models[key].train()
     train_static_ts = []
     train_static_loss = 0
     #-----------------
     train_dynamic_loss = 0
     train_dynamic_ts = []
-    train_dynamic_iou= []
     #----------------
     total_train_loss = 0
     sample_size = 0
@@ -208,15 +203,13 @@ for epoch in range(num_epochs):
 
         # ===================forward=====================
         encoded_features = models['encode'](single_cam_inputs)
-        # print('encoder shapes', encoded_features.shape) 
-        #-> torch.Size([9, 64, 96, 64]) w/o fusion layer
-        # torch.Size([9, 1024, 1, 1]) w fusion layer 
+        # print('encoder shapes', encoded_features.shape) -> torch.Size([9, 64, 96, 64])
         outputs= {}
         outputs['static'] = models['static'](encoded_features)
         outputs['dynamic'] = models['dynamic'](encoded_features)
 
         # true 
-        road_image_long = torch.stack(road_image).type(torch.LongTensor).to(DEVICE) # torch.Size([9, 800, 800]) 
+        road_image_long = torch.stack(road_image).type(torch.FloatTensor).to(DEVICE) # torch.Size([9, 800, 800]) 
         bbox_matrix_long = torch.stack([utils.bounding_box_to_matrix_image(i, opt.num_dynamic_labels) for i in target]).to(DEVICE) # torch.Size([9, 800, 800])
         if opt.verbose:
             print('static & dynamic ground truth shape', road_image_long.shape, bbox_matrix_long.shape)
@@ -226,7 +219,7 @@ for epoch in range(num_epochs):
             loss_dynamic = criterion_dynamic(outputs['dynamic'], bbox_matrix_long)
         else:
             loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800).type(torch.float32).to(DEVICE), bbox_matrix_long.type(torch.float32).to(DEVICE))
-        loss_static = criterion_static(outputs['static'], road_image_long)
+        loss_static = criterion_static(outputs['static'].view(-1, 800, 800), road_image_long)
         total_loss = loss_dynamic + loss_static
         # ===================backward====================
         model_optimizer.zero_grad()
@@ -242,6 +235,19 @@ for epoch in range(num_epochs):
         train_static_ts.extend(batch_ts)
         avg_train_ts = sum(batch_ts) / len(batch_ts)
         # dynamic
+        _, output_dynamic_pred = torch.max(outputs['dynamic'], dim = 1)
+        ## iou
+        #batch_iou_mean = utils.compute_bbox_matrix_iou(output_dynamic_pred, bbox_matrix_long, n_classes = opt.num_dynamic_labels)
+        #train_dynamic_iou.append(batch_iou_mean)
+        ## ts
+        #current_batch_dynamic_ts = []
+        #for i in range(batch_size):
+        #    dynamic_bbox = utils.matrix_to_bbox(output_dynamic_pred[i]) 
+        #    if opt.verbose:
+        #        print('shapes of predicted & gt bbox', dynamic_bbox.shape)
+        #    if dynamic_bbox.shape[0]:
+        #        dynamic_ts = compute_ats_bounding_boxes(dynamic_bbox, target[i]['bounding_box'])
+        #        current_batch_dynamic_ts.append(dynamic_ts)
         current_batch_dynamic_ts, _ = utils.get_ts_for_bb(outputs["dynamic"], target, opt.num_dynamic_labels)
         train_dynamic_ts.extend(current_batch_dynamic_ts)
         avg_dynamic_ts_batch = sum(current_batch_dynamic_ts) / batch_size
@@ -250,8 +256,7 @@ for epoch in range(num_epochs):
         batch_end_time = time.time()
         if batch % 10 == 0:
             print('batch [{}], epoch [{}], loss: {:.4f}, \
-                  time: {:.0f}s, static_ts: {:.4f}, dynamic_ts: {:.4f}\
-                  '
+                  time: {:.0f}s, static_ts: {:.4f}, dynamic_ts: {:.4f}'
                   .format(batch + 1, epoch + 1, total_train_loss / sample_size,
                           batch_time, avg_train_ts, avg_dynamic_ts_batch))
             if opt.verbose:
@@ -260,19 +265,24 @@ for epoch in range(num_epochs):
         # Empty Cache
         torch.cuda.empty_cache()
 
+    # update lr
+    model_lr_scheduler.step()
+
     # ===================log every epoch======================
     train_ts_static = sum(train_static_ts) / len(train_static_ts)
-    train_ts_dynamic = sum(train_dynamic_ts) / len(train_dynamic_ts)
-    val_ts_static, predicted_val_map_st , val_ts_dynamic, predicted_val_map_dy = utils.evaluation(models, val_loader, DEVICE, opt.num_dynamic_labels)
+    if len(train_dynamic_ts) == 0: 
+        train_ts_dynamic = 0
+    else:
+        train_ts_dynamic = sum(train_dynamic_ts) / len(train_dynamic_ts)
+    val_ts_static, predicted_val_map_st, val_ts_dynamic, predicted_val_map_dy = utils.evaluation(models, val_loader, DEVICE, opt.num_dynamic_labels)
     time_this_epoch_min = (time.time() - start_time) / 60
     print('epoch [{}/{}], loss: {:.4f}, time: {:.2f}min, remaining: {:.2f}min, \
         train_static_ts: {:.4f}, val_static_ts: {:.4f}, \
-        train_dynamic_ts: {:.4f}, val_dynamic_ts: {:.4f}, \
-        '
+        train_dynamic_ts: {:.4f}, val_dynamic_ts: {:.4f}'
           .format(epoch + 1, num_epochs, total_train_loss / sample_size,
                   time_this_epoch_min, time_this_epoch_min * (num_epochs - epoch - 1), 
                   train_ts_static, val_ts_static, train_ts_dynamic, val_ts_dynamic,
-                  ))
+                   ))
 
     learning_curve_st.append((train_ts_static, val_ts_static.tolist()))
     learning_curve_dy.append((train_ts_dynamic, val_ts_dynamic.tolist()))
@@ -285,14 +295,14 @@ for epoch in range(num_epochs):
             'predicted_val_static_map': predicted_val_map_st,
             'predicted_val_dynamic_map': predicted_val_map_dy
         },
-            FOLDER_PATH + '/unet_outputs/unet_plain_{}_{}.pth'.format(timestampStr, epoch))
+            FOLDER_PATH + 'unet_final/unet_{}_{}.pth'.format(timestampStr, epoch))
 
 torch.save({
-    'encode_state_dict': model['encode'].state_dict(),
-    'decode_dynamic_state_dict': model['dynamic'].state_dict(),
-    'decode_static_state_dict': model['static'].state_dict(),
+    'encode_state_dict': models['encode'].state_dict(),
+    'decode_dynamic_state_dict': models['dynamic'].state_dict(),
+    'decode_static_state_dict': models['static'].state_dict(),
     'plot_cache': [learning_curve_st, learning_curve_dy],
     'predicted_val_static_map': predicted_val_map_st,
     'predicted_val_dynamic_map': predicted_val_map_dy
 },
-    FOLDER_PATH + '/unet_outputs/unet_plain_{}_final.pth'.format(timestampStr))
+    FOLDER_PATH + 'unet_final/unet_{}_final.pth'.format(timestampStr))
