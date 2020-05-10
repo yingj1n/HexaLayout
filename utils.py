@@ -59,7 +59,7 @@ def evaluation(models, data_loader, device, dynamic_label): ## changed to add bb
         data_loader: The dataloader for a labeled dataset.
 
     Returns:
-        Average threat score for the entire data set.
+        verage threat score for the entire data set.
         Predicted classification results.
     """
     for key in models.keys():
@@ -360,6 +360,7 @@ def matrix_2d_to_3d(matrix, num_classes = 2):
                 if matrix[xx][yy] == i:
                     output[i, xx, yy] = 1
     return torch.from_numpy(output).type(torch.LongTensor)
+<<<<<<< HEAD
 
 
 
@@ -406,6 +407,8 @@ def matrix_to_3d_matrix(matrix):
     matrix_3d = torch.zeros((batch,1,H,W))
     matrix_3d = matrix[:, None,:,:]
     return matrix_3d
+=======
+>>>>>>> d100fc72a0b1301b0c7e1aa41cf2cecd2486e096
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.
