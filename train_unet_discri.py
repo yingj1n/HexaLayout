@@ -1,30 +1,15 @@
-# import os
 import random
 import time
 import argparse
-
 import numpy as np
-# import pandas as pd
 from datetime import datetime
 import pytz
-
-# import matplotlib
-# import matplotlib.pyplot as plt
-#
-# matplotlib.rcParams['figure.figsize'] = [5, 5]
-# matplotlib.rcParams['figure.dpi'] = 200
-
 import torch
 import torch.nn as nn
-# import torch.nn.functional as F
 import torchvision
 from torch.autograd import Variable
-
-# from model import RoadMapNetwork, LWRoadMapNetwork
-#from model import UNetRoadMapNetwork, UNetRoadMapNetwork_extend, UNetRoadMapNetwork_extend2
-from model import RoadEncoder, MonoDecoder, UnetDecoder, Discriminator
+from model import RoadEncoder, UnetDecoder, Discriminator
 import utils
-
 import code.data_helper as data_helper
 from code.data_helper import UnlabeledDataset, LabeledDataset
 from code.helper import collate_fn, draw_box
@@ -32,19 +17,15 @@ from code.helper import compute_iou, compute_ats_bounding_boxes
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--folder_dir', type=str, default='./')
-#parser.add_argument('--verbose_dim', action='store_true')
-
 ## training 
 parser.add_argument('--train_batch_size', type=int, default=9)
 parser.add_argument('--num_dynamic_labels', type=int, default=1,
                     choices=[1, 10])
-
 ## loss
 parser.add_argument("--scheduler_step_size", type=int, default=5,
                          help="step size for the both schedulers")
 parser.add_argument("--learning_rate", type=float, default=0.001,
                         help="learning rate for both schedulers")
-
 ## logs
 parser.add_argument("--verbose",
                          help="if print out dimensions in between model steps") 
@@ -72,10 +53,7 @@ labeled_scene_index = np.arange(106, 134)
 
 train_index_set = np.array(
     [133, 118, 130, 119, 107, 114, 122, 121, 132, 115, 126, 117, 112, 128, 108, 110, 131, 129, 124, 125, 106, 109])
-#train_index_set = np.array([133])
 val_index_set = np.array([i for i in labeled_scene_index if i not in set(train_index_set)])
-# print(val_index_set) [106 109 111 113 116 120 123 127]
-#val_index_set = np.array([111])
 
 
 
@@ -88,7 +66,6 @@ num_images = data_helper.NUM_IMAGE_PER_SAMPLE
 train_batch_size = opt.train_batch_size
 val_batch_size = 1
 num_epochs = 50
-#num_epochs = 1
 
 # The labeled dataset can only be retrieved by sample.
 # And all the returned data are tuple of tensors, since bounding boxes may have different size
@@ -128,14 +105,10 @@ models['encode'] = RoadEncoder(
                     single_blocks_sizes = single_blocks_sizes, ### TODO: try with different state-of-art in-out channels 
                     single_depths = [2,2,2]
                     )
-# quick test:
 models['static'] = UnetDecoder(single_block_size_output = single_blocks_sizes[-1], 
                                  num_objects = 1) 
 models['dynamic'] = UnetDecoder(single_block_size_output = single_blocks_sizes[-1], 
                                  num_objects = opt.num_dynamic_labels)  
-
-#models['static'] = MonoDecoder(single_block_size_output = single_blocks_sizes[-1], features = 2) 
-#models['dynamic'] = MonoDecoder(single_block_size_output = single_blocks_sizes[-1], features = opt.num_dynamic_labels)  
 
 
 models['static_dis'] = Discriminator(input_channel = 1)
@@ -158,7 +131,6 @@ for key in models.keys():
         parameters_to_train += list(models[key].parameters())
 
 
-# TODO: add discri layer + seperate learning rate
 model_optimizer = torch.optim.Adam(parameters_to_train,
                             lr=opt.learning_rate,
                             weight_decay=1e-5)
@@ -228,17 +200,11 @@ for epoch in range(num_epochs):
         # discrminator
         if opt.num_dynamic_labels == 10:
             bbox_matrix_discri = torch.stack([utils.bounding_box_to_3d_matrix_image(i, opt.num_dynamic_labels) for i in target]).to(DEVICE)
-            #print('bbox_matrix_discri shape & type', bbox_matrix_discri.shape, bbox_matrix_discri.dtype)
         else:
             bbox_matrix_discri = utils.matrix_to_3d_matrix(bbox_matrix_long).to(DEVICE)
-        road_image_discri = utils.matrix_to_3d_matrix(road_image_long).to(DEVICE)
-        if opt.verbose:
-            print('true discri shape',bbox_matrix_discri.shape, road_image_discri.shape)
-        # discriminator
+        road_image_discri = utils.matrix_to_3d_matrix(road_image_long).to(DEVICE))
         outputs['static_discri'] = outputs['static'].clone()
         outputs['dynamic_discri'] = outputs['dynamic'].clone()
-        if opt.verbose:
-            print('prediction discri shape',outputs['static_discri'].shape, outputs['dynamic_discri'].shape)
         fake_pred_static = models['static_dis'](outputs['static_discri'].to(DEVICE)) 
         fake_pred_dynamic = models['dynamic_dis'](outputs['dynamic_discri'].to(DEVICE))
         real_pred_static = models['static_dis'](road_image_discri)
@@ -246,7 +212,6 @@ for epoch in range(num_epochs):
         if opt.verbose:
             print('static pred & ground discirminator shape', fake_pred_static.shape, real_pred_static.shape)
             print('dynamic pred & ground discirminator shape', real_pred_static.shape, real_pred_dynamic.shape)
-            # should return ranges between [0,1] with shape (batchsize, 800, 800) 
         # loss
         loss_dis_static = criterion_discriminator(fake_pred_static.to(DEVICE), fake) + criterion_discriminator(real_pred_static.to(DEVICE), valid)
         loss_dis_dynamic = criterion_discriminator(fake_pred_dynamic.to(DEVICE), fake_c) + criterion_discriminator(real_pred_dynamic.to(DEVICE), valid_c)
@@ -326,9 +291,9 @@ for epoch in range(num_epochs):
             FOLDER_PATH + 'unet_discri/unet_{}_{}.pth'.format(timestampStr, epoch))
 
 torch.save({
-    'encode_state_dict': model['encode'].state_dict(),
-    'decode_dynamic_state_dict': model['dynamic'].state_dict(),
-    'decode_static_state_dict': model['static'].state_dict(),
+    'encode_state_dict': models['encode'].state_dict(),
+    'decode_dynamic_state_dict': models['dynamic'].state_dict(),
+    'decode_static_state_dict': models['static'].state_dict(),
     'plot_cache': [learning_curve_st, learning_curve_dy],
     'predicted_val_static_map': predicted_val_map_st,
     'predicted_val_dynamic_map': predicted_val_map_dy

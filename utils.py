@@ -86,9 +86,6 @@ def evaluation(models, data_loader, device, dynamic_label): ## changed to add bb
             outputs['dynamic'] = models['dynamic'](encoded_features)
 
             # dynamic
-            # bbox_matrix= torch.tensor(bounding_box_to_matrix_image(target[0], dynamic_label)).to(device) 
-            # _, output_dynamic_pred = torch.max(outputs['dynamic'], dim = 1)
-            # mean_iou = compute_bbox_matrix_iou(output_dynamic_pred, bbox_matrix)
             bb_batch_ts, predicted_bb_map = get_ts_for_bb(outputs["dynamic"], target, dynamic_label)
             # static
             batch_ts, predicted_road_map = get_ts_for_batch_binary(outputs['static'], road_image)
@@ -97,7 +94,6 @@ def evaluation(models, data_loader, device, dynamic_label): ## changed to add bb
             ts_list.extend(batch_ts)
             predicted_static_maps.append(predicted_road_map)
             predicted_dynamic_maps.append(predicted_bb_map)
-            #iou_list.append(mean_iou)
             dynamic_ts_list.extend(bb_batch_ts)
         
     return np.nanmean(ts_list), predicted_static_maps, np.nanmean(dynamic_ts_list), predicted_dynamic_maps
@@ -226,19 +222,6 @@ def bounding_box_to_3d_matrix_image(one_target, num_labels=10):
                 bounding_box_map[0][-i][j] = 0
     return torch.from_numpy(bounding_box_map).type(torch.LongTensor)
 
-def road_map_to_3d_matrix(matrix):
-    '''
-    takes in a batch of matrices and return a 4d matrices by adding a dimension and one hot encoding road/non-road
-    :input: matrix, a dim of batch * H * W matrices with 0's and 1's
-    :output: matrix_3d, a dim of batch * 2 * H * W matrices one hot encoded road/non-road matrices. 
-    '''
-    # print('input matrix shape', matrix.shape)
-    # print('matrix[0]', matrix[0].shape, type(matrix[0]))
-    batch, x, y = matrix.shape
-    matrix_3d = torch.empty(batch, 2, x, y)
-    for i in range(batch):
-        matrix_3d[i, :, :, :] = torch.stack((matrix[i], 1 - matrix[i]), 0)
-    return matrix_3d
 
 def matrix_to_bbox(image, verbose = False):
     image = image.cpu()
@@ -344,25 +327,6 @@ def compute_iou(box1, box2):
     
     return a.intersection(b).area / a.union(b).area
 
-def matrix_2d_to_3d(matrix, num_classes = 2):
-    ''' 
-    Use this function to tweek grond truth matrices to a three dimensional matrices,
-    from (H * W) to (num_classes * H * W), which in each dimension it is hot encoded features
-    :param matrix: a 2d np array
-    :num_classes : number of classes in this matrix
-    :output: return a 3d np array that one hot encoded each category
-    '''
-    x, y = matrix.shape
-    output = np.zeros((num_classes, x, y))
-    for i in range(num_classes):
-        for xx in range(x):
-            for yy in range(y):
-                if matrix[xx][yy] == i:
-                    output[i, xx, yy] = 1
-    return torch.from_numpy(output).type(torch.LongTensor)
-<<<<<<< HEAD
-
-
 
 def bounding_box_to_3d_matrix_image(one_target, num_labels=10):
     """Turn bounding box coordinates and labels to 800x800 matrix with label on the corresponding index.
@@ -407,8 +371,6 @@ def matrix_to_3d_matrix(matrix):
     matrix_3d = torch.zeros((batch,1,H,W))
     matrix_3d = matrix[:, None,:,:]
     return matrix_3d
-=======
->>>>>>> d100fc72a0b1301b0c7e1aa41cf2cecd2486e096
 
 # Some functions used to project 6 images and combine into one.
 # Requires cv2. Not currently used in modeling.
