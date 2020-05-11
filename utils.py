@@ -599,7 +599,7 @@ def matrix_to_bbox(image, verbose = False):
         return torch.from_numpy(bboxes)
     else: # Return the entire canvas when no bbox is being identified.
         bboxes = np.zeros([1, 2, 4])
-        bboxes[0] = np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2,4)
+        bboxes[0] = (np.array([0, 0, 800, 800, -0, -800, -0, -800]).reshape(2,4) - 400) / 10
         return torch.from_numpy(bboxes)
 
 # Some functions used to project 6 images and combine into one.
