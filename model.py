@@ -8,7 +8,7 @@ import utils
 
 from module_unet import UNet
 from module_resnet import ResNetEncoder
-
+from collections import OrderedDict
 
 class SingleImageCNN(nn.Module):
     def __init__(self, blocks_sizes=[64, 128, 256], depths=[2, 2, 2], in_feature=3):
