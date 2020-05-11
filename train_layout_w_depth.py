@@ -197,7 +197,7 @@ encoder_model_list = [module_monodepth2.ResnetEncoder(18, False) for i in range(
 depth_decoder_model_list = [module_monodepth2.DepthDecoder(num_ch_enc=encoder_model_list[0].num_ch_enc,
                                                            scales=range(4)) for i in range(6)]
 
-depth_model_weights = torch.load(depth_model_path)
+depth_model_weights = torch.load(depth_model_path, map_location=DEVICE)
 for i in range(6):
     encoder_model_list[i].load_state_dict(depth_model_weights[i]['encoder'])
     encoder_model_list[i].to(DEVICE)

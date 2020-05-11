@@ -11,6 +11,9 @@ import skimage.measure
 
 import PIL.Image as pil
 
+import module_monodepth2 # Source from monodepth2
+from layers import disp_to_depth # Source from monodepth2
+
 import code.helper as helper
 import code.data_helper as data_helper
 
@@ -223,6 +226,95 @@ def evaluation_layout(models, data_loader, device, bbox_labels=False,
 
             roadmap_batch_ts, predicted_road_map = get_rm_ts_for_batch(outputs["static"], road_image)
             rm_batch_accu, rm_batch_auc = get_accuracy_auc_for_batch(outputs["static"], road_image)
+            bb_batch_ts, predicted_bb_map = get_bb_ts_for_batch(outputs["dynamic"], target)
+            bb_batch_accu, bb_batch_auc = get_accuracy_auc_for_batch(outputs["dynamic"], target_bb_map)
+            #             print(roadmap_batch_ts, bb_batch_ts)
+            rm_ts_list.extend(roadmap_batch_ts)
+            rm_acc_list.extend(rm_batch_accu)
+            rm_auc_list.extend(rm_batch_auc)
+            bb_ts_list.extend(bb_batch_ts)
+            bb_acc_list.extend(bb_batch_accu)
+            bb_auc_list.extend(bb_batch_auc)
+            predicted_maps.append(predicted_road_map)  # useless
+            
+        accu_auc = {'rm': [np.nanmean(rm_acc_list), np.nanmean(rm_auc_list)],
+                    'bb': [np.nanmean(bb_acc_list), np.nanmean(bb_auc_list)]}
+
+    return np.nanmean(rm_ts_list), np.nanmean(bb_ts_list), accu_auc
+
+# A slightly modified version for using depth encoder
+def evaluation_layout_de(models, encoder_model_list, depth_decoder_model_list, data_loader, device, bbox_labels=False,
+                      depth=True):
+    """
+    Evaluate the layout model using thread score.
+    Args:
+        model: A trained pytorch model.
+        data_loader: The dataloader for a labeled dataset.
+        device: the torch.device to evaluation on
+        bbox_labels: whether to use 10 bbox labels (as opposed to treating all as 1
+        depth: whether to add depth in input
+        encoder_model_list, depth_decoder_model_list: only applicable if depth = True
+    Returns:
+        Average threat score for the entire data set.
+        Predicted classification results.
+    """
+    models = to_eval(models, device)
+    depth_width = 320
+    depth_height = 256
+    original_width = 306
+    original_height = 256
+    transform = torchvision.transforms.ToTensor()
+    rm_ts_list = []
+    bb_ts_list = []
+    rm_acc_list = []
+    rm_auc_list = []
+    bb_acc_list = []
+    bb_auc_list = []
+    predicted_maps = []
+
+    with torch.no_grad():
+        for sample, target, road_image, extra in tqdm(data_loader):
+            # target_bb_map = torch.stack([bounding_box_to_matrix_image(i) for i in target]).to(device)
+            target_bb_map = torch.stack([bounding_box_to_matrix_image(i, bbox_labels) for i in target]).to(device)
+            single_cam_inputs = []
+            raw_depth_inputs = []
+            for i in range(num_images):
+                single_cam_input = torch.stack([batch[i] for batch in sample])
+                # Need to get depth outputs as well, since the required input size for depth model is 320 * 256,
+                # need to do some processing
+                input_for_depth_list = []
+                for j in range(len(sample)):
+                    im = single_cam_input[j]
+                    pil_im = torchvision.transforms.ToPILImage()(im)
+                    pil_im = pil_im.resize((depth_width, depth_height), pil.LANCZOS)
+                    input_for_depth_list.append(transform(pil_im))
+                input_for_depth = torch.stack(input_for_depth_list).to(device)
+                # Get outputs of depth model
+                with torch.no_grad():
+                    d_features = encoder_model_list[i](input_for_depth)
+                    disp_outputs = depth_decoder_model_list[i](d_features)[("disp", 0)]
+                # We need to change the outputs dimension back to original dimension
+                disp_resized = nn.functional.interpolate(disp_outputs, (original_height, original_width), mode="bilinear", align_corners=False)
+                # Now we need to transfer the output disparity map to depth map
+                _, depth_out = disp_to_depth(disp_resized, 1, 40) # We set min depth to be 1 and max depth be 40
+                # Reproduce the only channel 3 times for it to match with encoder
+                # depth_out = torch.cat([depth_out, depth_out, depth_out], 1)
+            
+                raw_depth_inputs.append(depth_out)
+                single_cam_input = Variable(single_cam_input).to(device)
+                single_cam_inputs.append(single_cam_input)
+
+            encoded_raw_features = models['raw_encoder'](single_cam_inputs)
+            encoded_depth_features = models['depth_encoder'](raw_depth_inputs)
+        
+            # Now we concat the features from raw input and depth input
+            encoded_features = torch.cat([encoded_raw_features, encoded_depth_features], 1)
+            outputs = {}
+            outputs["dynamic"] = models["dynamic_decoder"](encoded_features)
+            outputs["static"] = models["static_decoder"](encoded_features)
+
+            roadmap_batch_ts, predicted_road_map = get_rm_ts_for_batch(outputs["static"], road_image)
+            rm_batch_accu, rm_batch_auc = get_accuracy_auc_for_batch(outputs["static"], road_image, static = False)
             bb_batch_ts, predicted_bb_map = get_bb_ts_for_batch(outputs["dynamic"], target)
             bb_batch_accu, bb_batch_auc = get_accuracy_auc_for_batch(outputs["dynamic"], target_bb_map)
             #             print(roadmap_batch_ts, bb_batch_ts)

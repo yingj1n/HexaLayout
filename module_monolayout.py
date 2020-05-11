@@ -1,3 +1,10 @@
+"""Monolayout encoder, decoder, and discriminator modules.
+
+With minor changes to make the module more user friendly.
+
+Original code from https://github.com/hbutsuak95/monolayout
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -95,6 +102,8 @@ class Decoder(nn.Module):
             #x = torch.cat((x, features[i-6]), 1)
             x = self.convs[("upconv", i, 1)](x)
             x = self.convs[("norm", i, 1)](x)
+            if verbose:
+                print('decode layer #', i, x.shape)
 
         if is_training:
                 x = self.convs["topview"](x) #self.softmax(self.convs["topview"](x))
