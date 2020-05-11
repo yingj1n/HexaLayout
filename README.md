@@ -18,5 +18,9 @@ run `python train_hexalayout.py --folder_dir ./data/root/dir/`
 run `python train_hexalayout_discri.py --folder_dir ./data/root/dir/`
 
 **Train HexaLayout with depth encoder** <br>
-run `python train_hexalayout_w_de.py --folder_dir ./data/root/dir/ --depth_model_dir <depth model dir here>`
-For our trained depth models, check [this drive folder](https://drive.google.com/drive/folders/1xdHYG5ti_S0rtzNTagoOryZWziu02MQY?usp=sharing)
+run `python train_hexalayout_w_de.py --folder_dir ./data/root/dir/ --depth_model_dir <depth model dir here>` 
+
+For our trained depth models, check [this drive folder](https://drive.google.com/drive/folders/1xdHYG5ti_S0rtzNTagoOryZWziu02MQY?usp=sharing) 
+
+For codes to train the Monodepth2 model, check [here](https://github.com/Heimine/monodepth2)
+
