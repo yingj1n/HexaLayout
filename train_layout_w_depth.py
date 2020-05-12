@@ -4,7 +4,6 @@ import time
 import argparse
 
 import numpy as np
-# import pandas as pd
 from datetime import datetime
 import pytz
 
@@ -16,15 +15,11 @@ import pytz
 
 import torch
 import torch.nn as nn
-# import torch.nn.functional as F
 import torchvision
 from torch.autograd import Variable
 
-import PIL.Image as pil
 import module_monodepth2
-from layers import disp_to_depth  # Source from monodepth2
 
-# from model import RoadMapNetwork, LWRoadMapNetwork
 from model import RoadMapEncoder, RoadMapEncoder_temporal
 import utils
 import module_monolayout
@@ -64,15 +59,11 @@ timestampStr = now_la.strftime("%m-%d-%H-%M")
 
 # =================================Load data======================================
 
-# unlabeled_scene_index = np.arange(106)
 labeled_scene_index = np.arange(106, 134)
 
 train_index_set = np.array(
     [133, 118, 130, 119, 107, 114, 122, 121, 132, 115, 126, 117, 112, 128, 108, 110, 131, 129, 124, 125, 106, 109])
-# small_train_index_set = np.array([133, 118, 130, 119, 107, 114, 122, 121, 132])
 val_index_set = np.array([i for i in labeled_scene_index if i not in set(train_index_set)])
-# print(val_index_set) [106 109 111 113 116 120 123 127]
-# val_index_set = np.array([111, 116, 120])
 
 # transform = torchvision.transforms.Compose(
 #     [torchvision.transforms.ToTensor(),
@@ -131,15 +122,6 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
 
 # =================================Initialize Model======================================
 
-# model = LWRoadMapNetwork(
-#     single_blocks_sizes=[64, 128, 256],
-#     single_depths=[1, 1, 1],
-#     fusion_block_sizes=[256, 512, 1024],
-#     fusion_depths=[1, 1, 1],
-#     fusion_out_feature=2048,
-#     temporal_hidden=2048,
-#     bev_input_dim=50
-# ).to(DEVICE)
 
 if opt.bbox_label:
     bbox_out_features = 10
@@ -208,8 +190,6 @@ for i in range(6):
     depth_decoder_model_list[i].to(DEVICE)
     depth_decoder_model_list[i].eval()
 
-# Initialize optimizers (TODO: discriminators
-
 parameters_discr = []
 parameters_other = []
 for key in models.keys():
@@ -226,17 +206,10 @@ optimizer_other = torch.optim.Adam(parameters_other,
                                    lr=learning_rate,
                                    weight_decay=1e-5)
 
-# patch = (1, 800 // 2**4, 800 // 2**4)
-#
-# valid = Variable(torch.Tensor(np.ones((train_batch_size, *patch))),
-#                                              requires_grad=False).float().to(DEVICE)
-# fake  = Variable(torch.Tensor(np.zeros((train_batch_size, *patch))),
-#                                              requires_grad=False).float().to(DEVICE)
 
 
 # =================================Training Loop======================================
 learning_curve = []
-# model.to(DEVICE)
 for epoch in range(num_epochs):
     train_loss = 0
     train_rm_ts_list = []
@@ -244,8 +217,6 @@ for epoch in range(num_epochs):
     sample_size = 0
     start_time = time.time()
     batch_end_time = start_time
-    # model.train()
-    # model = model.to(DEVICE)
     models = utils.to_train(models, DEVICE)
     for batch, (sample, target, road_image, extra) in enumerate(train_loader):
         batch_size = len(sample)

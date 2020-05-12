@@ -1,3 +1,4 @@
+"""Code taken from https://github.com/nianticlabs/monodepth2."""
 # Copyright Niantic 2019. Patent Pending. All rights reserved.
 #
 # This software is licensed under the terms of the Monodepth2 licence

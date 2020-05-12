@@ -1,10 +1,8 @@
-# import os
 import random
 import time
 import argparse
 
 import numpy as np
-# import pandas as pd
 from datetime import datetime
 import pytz
 
@@ -20,7 +18,6 @@ import torch.nn as nn
 import torchvision
 from torch.autograd import Variable
 
-# from model import RoadMapNetwork, LWRoadMapNetwork
 from model import RoadMapEncoder, RoadMapEncoder_temporal
 import utils
 import module_monolayout
@@ -60,20 +57,11 @@ timestampStr = now_la.strftime("%m-%d-%H-%M")
 
 # =================================Load data======================================
 
-# unlabeled_scene_index = np.arange(106)
 labeled_scene_index = np.arange(106, 134)
 
 train_index_set = np.array(
     [133, 118, 130, 119, 107, 114, 122, 121, 132, 115, 126, 117, 112, 128, 108, 110, 131, 129, 124, 125, 106, 109])
-# small_train_index_set = np.array([133, 118, 130, 119, 107, 114, 122, 121, 132])
 val_index_set = np.array([i for i in labeled_scene_index if i not in set(train_index_set)])
-# print(val_index_set) [106 109 111 113 116 120 123 127]
-# val_index_set = np.array([111, 116, 120])
-
-# transform = torchvision.transforms.Compose(
-#     [torchvision.transforms.ToTensor(),
-#      torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
-#                                       std=[0.229, 0.224, 0.225])])
 
 transform = torchvision.transforms.Compose(
     [torchvision.transforms.ToTensor(),
@@ -122,16 +110,6 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
                                          collate_fn=collate_fn)
 
 # =================================Initialize Model======================================
-
-# model = LWRoadMapNetwork(
-#     single_blocks_sizes=[64, 128, 256],
-#     single_depths=[1, 1, 1],
-#     fusion_block_sizes=[256, 512, 1024],
-#     fusion_depths=[1, 1, 1],
-#     fusion_out_feature=2048,
-#     temporal_hidden=2048,
-#     bev_input_dim=50
-# ).to(DEVICE)
 
 if opt.bbox_label:
     bbox_out_features = 10
@@ -197,13 +175,6 @@ optimizer_other = torch.optim.Adam(parameters_other,
                                    lr=learning_rate,
                                    weight_decay=1e-5)
 
-# patch = (1, 800 // 2**4, 800 // 2**4)
-#
-# valid = Variable(torch.Tensor(np.ones((train_batch_size, *patch))),
-#                                              requires_grad=False).float().to(DEVICE)
-# fake  = Variable(torch.Tensor(np.zeros((train_batch_size, *patch))),
-#                                              requires_grad=False).float().to(DEVICE)
-
 
 # =================================Training Loop======================================
 learning_curve = []
@@ -215,8 +186,6 @@ for epoch in range(num_epochs):
     sample_size = 0
     start_time = time.time()
     batch_end_time = start_time
-    # model.train()
-    # model = model.to(DEVICE)
     models = utils.to_train(models, DEVICE)
     for batch, (sample, target, road_image, extra) in enumerate(train_loader):
         batch_size = len(sample)
@@ -229,7 +198,6 @@ for epoch in range(num_epochs):
         single_cam_inputs = []
         for i in range(num_images):
             single_cam_input = torch.stack([batch[i] for batch in sample])
-            #             single_cam_input = utils.images_transform(single_cam_input, i)
             single_cam_input = Variable(single_cam_input).to(DEVICE)
             single_cam_inputs.append(single_cam_input)
 
@@ -245,7 +213,6 @@ for epoch in range(num_epochs):
         if opt.bbox_label:
             loss_dynamic = criterion_dynamic(outputs["dynamic"], target_bb_map)
         else:
-#             print(np.unique(target_bb_map.type(torch.LongTensor).numpy()))
             loss_dynamic = criterion_dynamic(outputs["dynamic"],
                                              target_bb_map.type(torch.LongTensor).to(DEVICE))
         loss_static = criterion_static(outputs["static"], road_image_long)

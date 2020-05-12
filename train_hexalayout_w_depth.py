@@ -4,28 +4,22 @@ import time
 import argparse
 
 import numpy as np
-# import pandas as pd
 from datetime import datetime
 import pytz
 
-import PIL.Image as pil
 import torch
 import torch.nn as nn
-# import torch.nn.functional as F
 import torchvision
-from torch.autograd import Variable
-
-import module_monodepth2 # Source from monodepth2
-from layers import disp_to_depth # Source from monodepth2
-
-from road_map_model import RoadMapEncoder, RoadMapEncoder_temporal
-from model import UnetDecoder
-#from mono_model import Decoder, Encoder
 import utils
 
+import module_monodepth2 # Source from monodepth2
+
+from model import RoadMapEncoder, UnetDecoder
+
+
 import code.data_helper as data_helper
-from code.data_helper import UnlabeledDataset, LabeledDataset
-from code.helper import collate_fn, draw_box, compute_ats_bounding_boxes
+from code.data_helper import LabeledDataset
+from code.helper import collate_fn
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--folder_dir', type=str, default='./')
@@ -59,23 +53,13 @@ labeled_scene_index = np.arange(106, 134)
 
 train_index_set = np.array(
     [133, 118, 130, 119, 107, 114, 122, 121, 132, 115, 126, 117, 112, 128, 108, 110, 131, 129, 124, 125, 106, 109])
-# small_train_index_set = np.array([133, 118, 130, 119, 107, 114, 122, 121, 132])
 val_index_set = np.array([i for i in labeled_scene_index if i not in set(train_index_set)])
-# print(val_index_set) [106 109 111 113 116 120 123 127]
-#val_index_set = np.array([111, 116, 120])
 
-# transform = torchvision.transforms.ToTensor()
-# transform = torchvision.transforms.Compose(
-#     [torchvision.transforms.ToTensor(),
-#      torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
-#                                       std=[0.229, 0.224, 0.225])])
 
 transform = torchvision.transforms.Compose(
    [torchvision.transforms.ToTensor(),
     torchvision.transforms.Normalize(mean=(0.5, 0.5, 0.5),
                                      std=(0.5, 0.5, 0.5))])
-
-#transform = torchvision.transforms.ToTensor()
 
 num_images = data_helper.NUM_IMAGE_PER_SAMPLE
 train_batch_size = opt.train_batch_size
@@ -120,15 +104,9 @@ if opt.bbox_label:
 else:
     bbox_out_features = 2
     criterion_dynamic = nn.CrossEntropyLoss()
-    #criterion_dynamic = nn.BCEWithLogitsLoss()
 
-#criterion_static = nn.BCEWithLogitsLoss()
 criterion_static = nn.CrossEntropyLoss()
 
-#models = {'raw_encoder': Encoder(18, 256, 306, False),
-#          'depth_encoder': Encoder(18, 256, 306, False),
-#          'static_decoder': Decoder(out_features=1),
-#          'dynamic_decoder': Decoder(out_features=bbox_out_features)}
 
 blocks_sizes = [16, 128, 256, 512, 2048]
 single_blocks_sizes=[64, 128, 256] # Add for unet
@@ -149,12 +127,6 @@ models = {'raw_encoder': RoadMapEncoder(
                          fusion_depths=[1, 1],
                          fusion_out_feature=1024,
                          fusion_on = False),
-        #   'static_decoder': Decoder(
-        #                  blocks_sizes=blocks_sizes,
-        #                  out_features=1),
-        #   'dynamic_decoder': Decoder(
-        #                  blocks_sizes=blocks_sizes,
-        #                  out_features=bbox_out_features)
         'static_decoder': UnetDecoder(single_block_size_output = single_blocks_sizes[-1]*2, 
                                 num_objects = 2),
         'dynamic_decoder': UnetDecoder(single_block_size_output = single_blocks_sizes[-1]*2, 
@@ -231,7 +203,7 @@ for epoch in range(num_epochs):
     ## Add some evaluation here
     #if opt.load_model:
     #    val_ts, val_bscore, accu_auc = utils.evaluation_layout(models, encoder_model_list, depth_decoder_model_list, 
-                                        val_loader, DEVICE)
+    #                                     val_loader, DEVICE)
     #    print('Evaluation result for model [{}], val_ts: {:.4f}, val_bscore: {:.4f}, road_map acc: {:.4f}, road_map auc: {:.4f}, bbox acc: {:.4f}, bbox auc: {:.4f}'
     #      .format(opt.model_path.split("/")[-1], val_ts, val_bscore, accu_auc["rm"][0], accu_auc["rm"][1], accu_auc["bb"][0], accu_auc["bb"][1]))
     #break # To delete when training

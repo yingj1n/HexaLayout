@@ -449,6 +449,7 @@ class RoadMapEncoder(nn.Module):
                  fusion_block_sizes=[256, 512],
                  fusion_depths=[2, 2],
                  fusion_out_feature=512,
+                 fusion_on=True,
                 ):
         super(RoadMapEncoder, self).__init__()
         #         self.bev_input_dim = bev_input_dim
@@ -467,6 +468,7 @@ class RoadMapEncoder(nn.Module):
 
         #         for i in range(len(self.single_encoder)):
         #             self.add_module('single_encoder_{}'.format(i), self.single_encoder[i])
+        self.fusion_on = fusion_on
         self.fusion = FusionNetwork(
             in_feature=single_blocks_sizes[-1],
             blocks_sizes=fusion_block_sizes,
@@ -485,12 +487,13 @@ class RoadMapEncoder(nn.Module):
         if verbose:
             print('concat_single', x.shape)
 
-        x = self.fusion(x)
-        if verbose:
-            print('fusion_out', x.shape)
+        if self.fusion_on:
+            x = self.fusion(x)
+            if verbose:
+                print('fusion_out', x.shape)
 
         return x
-    
+
     
 class RoadMapEncoder_temporal(nn.Module):
     def __init__(self,
