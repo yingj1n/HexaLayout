@@ -19,8 +19,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--folder_dir', type=str, default='./')
 ## training 
 parser.add_argument('--train_batch_size', type=int, default=9)
-parser.add_argument('--num_dynamic_labels', type=int, default=1,
-                    choices=[1, 10])
+parser.add_argument('--num_dynamic_labels', type=int, default=2,
+                    choices=[1, 2, 10])
 ## loss
 parser.add_argument("--scheduler_step_size", type=int, default=5,
                          help="step size for the both schedulers")
@@ -116,11 +116,14 @@ models['dynamic_dis'] = Discriminator(input_channel = opt.num_dynamic_labels)
 
 # define loss func
 criterion_static = nn.BCEWithLogitsLoss()
+labels=False
 if opt.num_dynamic_labels == 10:   
-    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))## l2 loss
-else: 
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
+    labels = True
+elif opt.num_dynamic_labels == 2:   
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 15]).to(DEVICE))
+else:
     criterion_dynamic = nn.BCEWithLogitsLoss()
-criterion_discriminator = nn.BCEWithLogitsLoss()
 
 parameters_to_train = []
 parameters_to_train_disc = []
@@ -215,10 +218,14 @@ for epoch in range(num_epochs):
         # loss
         loss_dis_static = criterion_discriminator(fake_pred_static.to(DEVICE), fake) + criterion_discriminator(real_pred_static.to(DEVICE), valid)
         loss_dis_dynamic = criterion_discriminator(fake_pred_dynamic.to(DEVICE), fake_c) + criterion_discriminator(real_pred_dynamic.to(DEVICE), valid_c)
+        
         if opt.num_dynamic_labels == 10:  
             loss_dynamic = criterion_dynamic(outputs['dynamic'], bbox_matrix_long)
+        elif opt.num_dynamic_labels == 2:
+            loss_dynamic = criterion_dynamic(outputs["dynamic"].to(DEVICE), bbox_matrix_long.to(DEVICE))
         else:
-            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800).type(torch.float32).to(DEVICE), bbox_matrix_long.type(torch.float32).to(DEVICE))
+            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1,800,800).to(DEVICE), bbox_matrix_long.type(torch.float).to(DEVICE))
+            
         loss_static = criterion_static(outputs['static'].view(-1, 800, 800), road_image_long)
         total_discri_loss = loss_dis_static + loss_dis_dynamic
         total_loss = loss_dynamic + loss_static

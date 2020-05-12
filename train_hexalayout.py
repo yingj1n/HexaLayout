@@ -15,12 +15,14 @@ from code.data_helper import UnlabeledDataset, LabeledDataset
 from code.helper import collate_fn, draw_box
 from code.helper import compute_iou, compute_ats_bounding_boxes
 
+torch.autograd.set_detect_anomaly(True)
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--folder_dir', type=str, default='./')
 ## training 
 parser.add_argument('--train_batch_size', type=int, default=9)
-parser.add_argument('--num_dynamic_labels', type=int, default=1,
-                    choices=[1, 10])
+parser.add_argument('--num_dynamic_labels', type=int, default=2,
+                    choices=[1, 2, 10])
 ## loss
 parser.add_argument("--scheduler_step_size", type=int, default=5,
                          help="step size for the both schedulers")
@@ -112,10 +114,15 @@ models['dynamic'] = UnetDecoder(single_block_size_output = single_blocks_sizes[-
 
 # define loss func
 criterion_static = nn.BCEWithLogitsLoss()
+labels=False
 if opt.num_dynamic_labels == 10:   
-    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))## l2 loss
-else: 
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1] + [15] * 9).to(DEVICE))
+    labels = True
+elif opt.num_dynamic_labels == 2:   
+    criterion_dynamic = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 15]).to(DEVICE))
+else:
     criterion_dynamic = nn.BCEWithLogitsLoss()
+    
 
 parameters_to_train = []
 for key in models.keys():
@@ -168,16 +175,21 @@ for epoch in range(num_epochs):
 
         # true 
         road_image_long = torch.stack(road_image).type(torch.FloatTensor).to(DEVICE) # torch.Size([9, 800, 800]) 
-        bbox_matrix_long = torch.stack([utils.bounding_box_to_matrix_image(i, opt.num_dynamic_labels) for i in target]).to(DEVICE) # torch.Size([9, 800, 800])
+        bbox_matrix_long = torch.stack([utils.bounding_box_to_matrix_image(i, labels = labels) for i in target]).to(DEVICE) # torch.Size([9, 800, 800])
         if opt.verbose:
             print('static & dynamic ground truth shape', road_image_long.shape, bbox_matrix_long.shape)
-            print('static & dynamic prediction shape', outputs['static'].shape, outputs['dynamic'].shape)
+            print('static & dynamic prediction shape & type', outputs['static'].shape, outputs['dynamic'].shape,
+                 outputs['static'].dtype, outputs['dynamic'].dtype)
         # loss
         if opt.num_dynamic_labels == 10:  
-            loss_dynamic = criterion_dynamic(outputs['dynamic'], bbox_matrix_long)
+            loss_dynamic = criterion_dynamic(outputs['dynamic'].to(DEVICE), bbox_matrix_long)
+        elif opt.num_dynamic_labels == 2:
+            loss_dynamic = criterion_dynamic(outputs["dynamic"].to(DEVICE), bbox_matrix_long.to(DEVICE))
+            #print(loss_dynamic)
         else:
-            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1, 800, 800).type(torch.float32).to(DEVICE), bbox_matrix_long.type(torch.float32).to(DEVICE))
-        loss_static = criterion_static(outputs['static'].view(-1, 800, 800), road_image_long)
+            loss_dynamic = criterion_dynamic(outputs["dynamic"].view(-1,800,800).to(DEVICE), bbox_matrix_long.type(torch.float).to(DEVICE))
+        loss_static = criterion_static(outputs['static'].view(-1,800,800).to(DEVICE), road_image_long.to(DEVICE))
+        
         total_loss = loss_dynamic + loss_static
         # ===================backward====================
         model_optimizer.zero_grad()
@@ -186,14 +198,13 @@ for epoch in range(num_epochs):
         # ===================log========================
         train_dynamic_loss += loss_dynamic.item() * batch_size
         train_static_loss += loss_static.item() * batch_size
-        total_train_loss += train_dynamic_loss + train_static_loss
+        total_train_loss += total_loss.item() + train_static_loss
         sample_size += batch_size
         # static
         batch_ts, _ = utils.get_ts_for_batch_binary(outputs["static"], road_image)
         train_static_ts.extend(batch_ts)
         avg_train_ts = sum(batch_ts) / len(batch_ts)
         # dynamic
-        _, output_dynamic_pred = torch.max(outputs['dynamic'], dim = 1)
         current_batch_dynamic_ts, _ = utils.get_ts_for_bb(outputs["dynamic"], target, opt.num_dynamic_labels)
         train_dynamic_ts.extend(current_batch_dynamic_ts)
         avg_dynamic_ts_batch = sum(current_batch_dynamic_ts) / batch_size
@@ -230,8 +241,8 @@ for epoch in range(num_epochs):
                   train_ts_static, val_ts_static, train_ts_dynamic, val_ts_dynamic,
                    ))
 
-    learning_curve_st.append((train_ts_static, val_ts_static.tolist()))
-    learning_curve_dy.append((train_ts_dynamic, val_ts_dynamic.tolist()))
+    learning_curve_st.append((train_ts_static.item(), val_ts_static.item()))
+    learning_curve_dy.append((train_ts_dynamic.item(), val_ts_dynamic.item()))
     if epoch % 5 == 0 and epoch != 0:
         torch.save({
             'encode_state_dict': models['encode'].state_dict(),
