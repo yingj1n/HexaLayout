@@ -96,7 +96,7 @@ val_loader = torch.utils.data.DataLoader(labeled_valset,
 
 
 
-################################## SPECIFY YOUR MODEL HERE ##############################
+################################## SPECIFY MODEL HERE ##############################
 
 # define model
 models = {}
@@ -288,7 +288,7 @@ for epoch in range(num_epochs):
             'predicted_val_static_map': predicted_val_map_st,
             'predicted_val_dynamic_map': predicted_val_map_dy
         },
-            FOLDER_PATH + 'unet_discri/unet_{}_{}.pth'.format(timestampStr, epoch))
+            FOLDER_PATH + 'hexa_dirsci_{}_{}.pth'.format(timestampStr, epoch))
 
 torch.save({
     'encode_state_dict': models['encode'].state_dict(),
@@ -298,4 +298,4 @@ torch.save({
     'predicted_val_static_map': predicted_val_map_st,
     'predicted_val_dynamic_map': predicted_val_map_dy
 },
-    FOLDER_PATH + 'unet_discri/unet_{}_final.pth'.format(timestampStr))
+    FOLDER_PATH + 'hexa_dirsci_{}_final.pth'.format(timestampStr))

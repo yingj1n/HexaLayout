@@ -6,7 +6,7 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torchvision
 import skimage.measure
-from dl_final_project.layers import disp_to_depth  # Source from monodepth2
+from layers import disp_to_depth  # Source from monodepth2
 # import cv2
 
 import PIL.Image as pil
