@@ -1,5 +1,5 @@
 # HexaLayout: From images to roadmap and object detection on BEV
-Authors: Ying Jin, Xiao Li, Shiqing Li
+Authors: [Ying Jin](https://github.com/yingj1n), [Xiao Li](https://github.com/Heimine), [Shiqing Li](https://github.com/lexili24)
 
 ### Abstract
 In this work, we attempt to solve a novel problem of estimating the surrounding bird eye layout of a complex driving scenario with six different camera perspective images only. While existing literature aims to approach this set of problem with a pre-trained neural network with ability todetect object given images, and rely on intrinsic and extrinsic calibration data to transform from perspective view(s) to bird eye view (BEV), we followed the idea from MonoLayout (Mani et al., 2020) to derive a single model that transform from perspective view to BEV and segments objects all-in-one. We also propose an architecture using both ResNet (He et al., 2015) and U-Net (Ron-neberger et al., 2015) that outperforms the Mono-Layout architecture.
@@ -22,4 +22,8 @@ run `python train_hexalayout_w_depth.py --folder_dir /data/root/dir/ --depth_mod
 For our trained depth models, check [this drive folder](https://drive.google.com/drive/folders/1xdHYG5ti_S0rtzNTagoOryZWziu02MQY?usp=sharing)
 
 Check our fork for training the Monodepth2 model [here](https://github.com/Heimine/monodepth2).
+
+### Acknowledgement
+We want to thank the host of the github page of Monodepth2 for his kindly and patient advice on how to use their methods.
+
 
